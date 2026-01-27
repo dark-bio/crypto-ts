@@ -14,3 +14,5 @@ endif
 	@echo "Setting version to $(VERSION)"
 	sed -i '' 's/"version": "[^"]*"/"version": "$(VERSION)"/' package.json
 	sed -i '' 's/^version = .*/version = "$(VERSION)"/' crates/wasm/Cargo.toml
+	npm install --package-lock-only
+	cargo generate-lockfile --manifest-path crates/wasm/Cargo.toml
