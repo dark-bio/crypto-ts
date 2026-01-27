@@ -146,7 +146,7 @@ export class PublicKey {
   async seal(
     msgToSeal: Uint8Array,
     msgToAuth: Uint8Array,
-    domain: Uint8Array
+    domain: Uint8Array,
   ): Promise<Uint8Array> {
     await ensureInit();
     return new Uint8Array(xhpke_seal(this.bytes, msgToSeal, msgToAuth, domain));
@@ -228,7 +228,7 @@ export class SecretKey {
   async open(
     sealed: Uint8Array,
     msgToAuth: Uint8Array,
-    domain: Uint8Array
+    domain: Uint8Array,
   ): Promise<Uint8Array> {
     await ensureInit();
     return new Uint8Array(xhpke_open(this.bytes, sealed, msgToAuth, domain));

@@ -36,7 +36,7 @@ describe("cose", () => {
         signed,
         aad,
         pk,
-        domain
+        domain,
       );
 
       expect(recovered).toEqual(payload);
@@ -50,9 +50,7 @@ describe("cose", () => {
 
       const signed = await sign(["hello"], null, sk1, domain);
 
-      await expect(
-        verify(signed, null, pk2, domain)
-      ).rejects.toThrow();
+      await expect(verify(signed, null, pk2, domain)).rejects.toThrow();
     });
 
     it("fails verification with wrong AAD", async () => {
@@ -62,19 +60,22 @@ describe("cose", () => {
 
       const signed = await sign("payload", "aad1", sk, domain);
 
-      await expect(
-        verify(signed, "aad2", pk, domain)
-      ).rejects.toThrow();
+      await expect(verify(signed, "aad2", pk, domain)).rejects.toThrow();
     });
 
     it("fails verification with wrong domain", async () => {
       const sk = await XdsaSecretKey.generate();
       const pk = await sk.publicKey();
 
-      const signed = await sign("payload", null, sk, new TextEncoder().encode("domain1"));
+      const signed = await sign(
+        "payload",
+        null,
+        sk,
+        new TextEncoder().encode("domain1"),
+      );
 
       await expect(
-        verify(signed, null, pk, new TextEncoder().encode("domain2"))
+        verify(signed, null, pk, new TextEncoder().encode("domain2")),
       ).rejects.toThrow();
     });
   });
@@ -88,7 +89,9 @@ describe("cose", () => {
       const msg = ["external payload"];
       const signed = await signDetached(msg, sk, domain);
 
-      await expect(verifyDetached(signed, msg, pk, domain)).resolves.toBeUndefined();
+      await expect(
+        verifyDetached(signed, msg, pk, domain),
+      ).resolves.toBeUndefined();
     });
 
     it("fails with modified message", async () => {
@@ -99,7 +102,7 @@ describe("cose", () => {
       const signed = await signDetached(["original"], sk, domain);
 
       await expect(
-        verifyDetached(signed, ["modified"], pk, domain)
+        verifyDetached(signed, ["modified"], pk, domain),
       ).rejects.toThrow();
     });
   });
@@ -144,7 +147,7 @@ describe("cose", () => {
         aad,
         recipientSk,
         signerPk,
-        domain
+        domain,
       );
 
       expect(opened).toEqual(payload);
@@ -158,10 +161,16 @@ describe("cose", () => {
       const recipientSk2 = await XhpkeSecretKey.generate();
       const domain = new TextEncoder().encode("test");
 
-      const sealed = await seal("payload", null, signerSk, recipientPk1, domain);
+      const sealed = await seal(
+        "payload",
+        null,
+        signerSk,
+        recipientPk1,
+        domain,
+      );
 
       await expect(
-        open(sealed, null, recipientSk2, signerPk, domain)
+        open(sealed, null, recipientSk2, signerPk, domain),
       ).rejects.toThrow();
     });
 
@@ -173,10 +182,16 @@ describe("cose", () => {
       const recipientPk = await recipientSk.publicKey();
       const domain = new TextEncoder().encode("test");
 
-      const sealed = await seal("payload", null, signerSk1, recipientPk, domain);
+      const sealed = await seal(
+        "payload",
+        null,
+        signerSk1,
+        recipientPk,
+        domain,
+      );
 
       await expect(
-        open(sealed, null, recipientSk, signerPk2, domain)
+        open(sealed, null, recipientSk, signerPk2, domain),
       ).rejects.toThrow();
     });
   });
@@ -195,7 +210,12 @@ describe("cose", () => {
       const signed = await sign(payload, aad, signerSk, domain);
       const encrypted = await encrypt(signed, aad, recipientPk, domain);
       const decrypted = await decrypt(encrypted, aad, recipientSk, domain);
-      const recovered = await verify<string, null>(decrypted, aad, signerPk, domain);
+      const recovered = await verify<string, null>(
+        decrypted,
+        aad,
+        signerPk,
+        domain,
+      );
 
       expect(recovered).toBe(payload);
     });
@@ -222,7 +242,12 @@ describe("cose", () => {
 
       const payload = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
       const signed = await sign(payload, null, sk, domain);
-      const recovered = await verify<Uint8Array, null>(signed, null, pk, domain);
+      const recovered = await verify<Uint8Array, null>(
+        signed,
+        null,
+        pk,
+        domain,
+      );
 
       expect(toHex(recovered)).toBe(toHex(payload));
     });
@@ -232,14 +257,15 @@ describe("cose", () => {
       const pk = await sk.publicKey();
       const domain = new TextEncoder().encode("test");
 
-      const payload = [
-        [1, "document"],
-        ["hello", [1234567890, "alice"]],
-        null,
-      ];
+      const payload = [[1, "document"], ["hello", [1234567890, "alice"]], null];
 
       const signed = await sign(payload, null, sk, domain);
-      const recovered = await verify<typeof payload, null>(signed, null, pk, domain);
+      const recovered = await verify<typeof payload, null>(
+        signed,
+        null,
+        pk,
+        domain,
+      );
 
       expect(recovered).toEqual(payload);
     });
@@ -256,7 +282,12 @@ describe("cose", () => {
       ]);
 
       const signed = await sign(payload, null, sk, domain);
-      const recovered = await verify<Map<number, unknown>, null>(signed, null, pk, domain);
+      const recovered = await verify<Map<number, unknown>, null>(
+        signed,
+        null,
+        pk,
+        domain,
+      );
 
       expect(recovered).toBeInstanceOf(Map);
       expect(recovered.get(1)).toBe(123);
@@ -279,7 +310,12 @@ describe("cose", () => {
       ]);
 
       const signed = await sign(payload, null, sk, domain);
-      const recovered = await verify<Map<number, unknown>, null>(signed, null, pk, domain);
+      const recovered = await verify<Map<number, unknown>, null>(
+        signed,
+        null,
+        pk,
+        domain,
+      );
 
       expect(recovered.get(1)).toBe("outer");
       const recoveredInner = recovered.get(2) as Map<number, unknown>;

@@ -32,7 +32,7 @@ export async function key(
   secret: Uint8Array,
   salt: Uint8Array,
   info: Uint8Array,
-  outLen: number
+  outLen: number,
 ): Promise<Uint8Array> {
   await ensureInit();
   return new Uint8Array(hkdf_key(secret, salt, info, outLen));
@@ -50,7 +50,7 @@ export async function key(
  */
 export async function extract(
   secret: Uint8Array,
-  salt: Uint8Array
+  salt: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
   return new Uint8Array(hkdf_extract(secret, salt));
@@ -70,7 +70,7 @@ export async function extract(
 export async function expand(
   prk: Uint8Array,
   info: Uint8Array,
-  outLen: number
+  outLen: number,
 ): Promise<Uint8Array> {
   await ensureInit();
   return new Uint8Array(hkdf_expand(prk, info, outLen));

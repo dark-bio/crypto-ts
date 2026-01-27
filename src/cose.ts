@@ -56,12 +56,14 @@ export async function sign<E, A>(
   msgToEmbed: E,
   msgToAuth: A,
   signer: XdsaSecretKey,
-  domain: Uint8Array
+  domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
   const embedBytes = cborEncode(msgToEmbed);
   const authBytes = cborEncode(msgToAuth);
-  return new Uint8Array(cose_sign(embedBytes, authBytes, signer.toBytes(), domain));
+  return new Uint8Array(
+    cose_sign(embedBytes, authBytes, signer.toBytes(), domain),
+  );
 }
 
 /**
@@ -75,11 +77,13 @@ export async function sign<E, A>(
 export async function signDetached<A>(
   msgToAuth: A,
   signer: XdsaSecretKey,
-  domain: Uint8Array
+  domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
   const authBytes = cborEncode(msgToAuth);
-  return new Uint8Array(cose_sign_detached(authBytes, signer.toBytes(), domain));
+  return new Uint8Array(
+    cose_sign_detached(authBytes, signer.toBytes(), domain),
+  );
 }
 
 /**
@@ -97,7 +101,7 @@ export async function verify<T, A>(
   msgToAuth: A,
   verifier: XdsaPublicKey,
   domain: Uint8Array,
-  maxDriftSecs?: number
+  maxDriftSecs?: number,
 ): Promise<T> {
   await ensureInit();
   const authBytes = cborEncode(msgToAuth);
@@ -106,7 +110,7 @@ export async function verify<T, A>(
     authBytes,
     verifier.toBytes(),
     domain,
-    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined
+    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined,
   );
   return cborDecode(new Uint8Array(payloadBytes)) as T;
 }
@@ -125,7 +129,7 @@ export async function verifyDetached<A>(
   msgToAuth: A,
   verifier: XdsaPublicKey,
   domain: Uint8Array,
-  maxDriftSecs?: number
+  maxDriftSecs?: number,
 ): Promise<void> {
   await ensureInit();
   const authBytes = cborEncode(msgToAuth);
@@ -134,7 +138,7 @@ export async function verifyDetached<A>(
     authBytes,
     verifier.toBytes(),
     domain,
-    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined
+    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined,
   );
 }
 
@@ -171,7 +175,9 @@ export async function peek<T>(signature: Uint8Array): Promise<T> {
  * @param ciphertext - The COSE_Encrypt0 structure
  * @returns The recipient fingerprint
  */
-export async function recipient(ciphertext: Uint8Array): Promise<XhpkeFingerprint> {
+export async function recipient(
+  ciphertext: Uint8Array,
+): Promise<XhpkeFingerprint> {
   await ensureInit();
   const fp = new Uint8Array(cose_recipient(ciphertext));
   return XhpkeFingerprint.fromBytes(fp);
@@ -192,13 +198,19 @@ export async function seal<S, A>(
   msgToAuth: A,
   signerKey: XdsaSecretKey,
   recipientKey: XhpkePublicKey,
-  domain: Uint8Array
+  domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
   const sealBytes = cborEncode(msgToSeal);
   const authBytes = cborEncode(msgToAuth);
   return new Uint8Array(
-    cose_seal(sealBytes, authBytes, signerKey.toBytes(), recipientKey.toBytes(), domain)
+    cose_seal(
+      sealBytes,
+      authBytes,
+      signerKey.toBytes(),
+      recipientKey.toBytes(),
+      domain,
+    ),
   );
 }
 
@@ -219,7 +231,7 @@ export async function open<T, A>(
   recipientKey: XhpkeSecretKey,
   senderKey: XdsaPublicKey,
   domain: Uint8Array,
-  maxDriftSecs?: number
+  maxDriftSecs?: number,
 ): Promise<T> {
   await ensureInit();
   const authBytes = cborEncode(msgToAuth);
@@ -229,7 +241,7 @@ export async function open<T, A>(
     recipientKey.toBytes(),
     senderKey.toBytes(),
     domain,
-    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined
+    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined,
   );
   return cborDecode(new Uint8Array(payloadBytes)) as T;
 }
@@ -251,11 +263,13 @@ export async function encrypt<A>(
   sign1: Uint8Array,
   msgToAuth: A,
   recipientKey: XhpkePublicKey,
-  domain: Uint8Array
+  domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
   const authBytes = cborEncode(msgToAuth);
-  return new Uint8Array(cose_encrypt(sign1, authBytes, recipientKey.toBytes(), domain));
+  return new Uint8Array(
+    cose_encrypt(sign1, authBytes, recipientKey.toBytes(), domain),
+  );
 }
 
 /**
@@ -274,9 +288,11 @@ export async function decrypt<A>(
   msgToOpen: Uint8Array,
   msgToAuth: A,
   recipientKey: XhpkeSecretKey,
-  domain: Uint8Array
+  domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
   const authBytes = cborEncode(msgToAuth);
-  return new Uint8Array(cose_decrypt(msgToOpen, authBytes, recipientKey.toBytes(), domain));
+  return new Uint8Array(
+    cose_decrypt(msgToOpen, authBytes, recipientKey.toBytes(), domain),
+  );
 }

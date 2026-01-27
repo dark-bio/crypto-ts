@@ -35,8 +35,10 @@ export async function key(
   time: number,
   memory: number,
   threads: number,
-  outLen: number
+  outLen: number,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(argon2_key(password, salt, time, memory, threads, outLen));
+  return new Uint8Array(
+    argon2_key(password, salt, time, memory, threads, outLen),
+  );
 }

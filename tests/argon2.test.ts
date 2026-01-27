@@ -24,22 +24,30 @@ describe("argon2", () => {
 
   it("derives key correctly (time=1, memory=64, threads=1)", async () => {
     const result = await key(password, salt, 1, 64, 1, 24);
-    expect(toHex(result)).toBe("655ad15eac652dc59f7170a7332bf49b8469be1fdb9c28bb");
+    expect(toHex(result)).toBe(
+      "655ad15eac652dc59f7170a7332bf49b8469be1fdb9c28bb",
+    );
   });
 
   it("derives key correctly (time=2, memory=64, threads=1)", async () => {
     const result = await key(password, salt, 2, 64, 1, 24);
-    expect(toHex(result)).toBe("068d62b26455936aa6ebe60060b0a65870dbfa3ddf8d41f7");
+    expect(toHex(result)).toBe(
+      "068d62b26455936aa6ebe60060b0a65870dbfa3ddf8d41f7",
+    );
   });
 
   it("derives key correctly (time=2, memory=64, threads=2)", async () => {
     const result = await key(password, salt, 2, 64, 2, 24);
-    expect(toHex(result)).toBe("350ac37222f436ccb5c0972f1ebd3bf6b958bf2071841362");
+    expect(toHex(result)).toBe(
+      "350ac37222f436ccb5c0972f1ebd3bf6b958bf2071841362",
+    );
   });
 
   it("derives key correctly (time=3, memory=256, threads=2)", async () => {
     const result = await key(password, salt, 3, 256, 2, 24);
-    expect(toHex(result)).toBe("4668d30ac4187e6878eedeacf0fd83c5a0a30db2cc16ef0b");
+    expect(toHex(result)).toBe(
+      "4668d30ac4187e6878eedeacf0fd83c5a0a30db2cc16ef0b",
+    );
   });
 
   it("produces different outputs for different passwords", async () => {

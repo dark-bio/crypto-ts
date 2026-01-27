@@ -58,7 +58,7 @@ describe("hkdf", () => {
   // Test expand function
   it("expands PRK correctly (RFC 5869 A.1)", async () => {
     const prk = fromHex(
-      "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"
+      "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
     );
     const info = fromHex("f0f1f2f3f4f5f6f7f8f9");
     const expected =
