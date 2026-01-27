@@ -1,6 +1,6 @@
 [package]
 name = "darkbio-crypto-wasm"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 publish = false
 
@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-darkbio-crypto = { version="0.11.8", features = ["rand", "hkdf", "argon2", "cose"] }
+darkbio-crypto = { version="0.11.9", features = ["rand", "hkdf", "argon2", "cose"] }
 wasm-bindgen = "0.2"
 
 [profile.release]

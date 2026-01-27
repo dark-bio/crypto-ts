@@ -344,9 +344,9 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto"
-version = "0.11.8"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a4a65d363cd516561b9393528868c21b189f08b10694a2a30373f204f62eee1"
+checksum = "421c61e419553aeb08a170107dff1d2009431e574dba9d622acb3faf38b24cf5"
 dependencies = [
  "argon2",
  "base64",
@@ -381,9 +381,9 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto-cbor-derive"
-version = "0.11.8"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa61787568f472b35e3b67d46d3ce67fb21b42fd34ff21c51a912d8a2c39dac3"
+checksum = "7c636d509a3e638dc3fae20271f72b218a8325192e56cd0bc8e35a6fa8711267"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto-wasm"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "darkbio-crypto",
  "wasm-bindgen",
