@@ -169,6 +169,7 @@ pub fn xdsa_public_key_from_cert_der(der: &[u8], signer: &[u8]) -> Result<Vec<u8
 
 /// Generates a PEM-encoded X.509 certificate for a public key, signed by an issuer.
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn xdsa_public_key_to_cert_pem(
     public_key: &[u8],
     signer: &[u8],
@@ -205,6 +206,7 @@ pub fn xdsa_public_key_to_cert_pem(
 
 /// Generates a DER-encoded X.509 certificate for a public key, signed by an issuer.
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn xdsa_public_key_to_cert_der(
     public_key: &[u8],
     signer: &[u8],
