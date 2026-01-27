@@ -10,6 +10,7 @@ import {
   SIGNATURE_SIZE,
   FINGERPRINT_SIZE,
 } from "../src/xdsa.js";
+import type { Params } from "../src/x509.js";
 
 describe("xdsa", () => {
   function toHex(bytes: Uint8Array): string {
@@ -167,5 +168,98 @@ describe("xdsa", () => {
     const bytes = fp.toBytes();
     const fp2 = Fingerprint.fromBytes(bytes);
     expect(toHex(fp2.toBytes())).toBe(toHex(fp.toBytes()));
+  });
+
+  it("generates and parses PEM certificate", async () => {
+    const alice = await SecretKey.generate();
+    const bobby = await SecretKey.generate();
+    const alicePub = await alice.publicKey();
+    const bobbyPub = await bobby.publicKey();
+
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const params: Params = {
+      subjectName: "Alice",
+      issuerName: "Bobby",
+      notBefore: now,
+      notAfter: now + 3600n,
+    };
+
+    const pem = await alicePub.toCertPem(bobby, params);
+    expect(pem).toContain("-----BEGIN CERTIFICATE-----");
+    expect(pem).toContain("-----END CERTIFICATE-----");
+
+    const { key, notBefore, notAfter } = await PublicKey.fromCertPem(
+      pem,
+      bobbyPub,
+    );
+    expect(toHex(key.toBytes())).toBe(toHex(alicePub.toBytes()));
+    expect(notBefore).toBe(now);
+    expect(notAfter).toBe(now + 3600n);
+  });
+
+  it("generates and parses DER certificate", async () => {
+    const alice = await SecretKey.generate();
+    const bobby = await SecretKey.generate();
+    const alicePub = await alice.publicKey();
+    const bobbyPub = await bobby.publicKey();
+
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const params: Params = {
+      subjectName: "Alice",
+      issuerName: "Bobby",
+      notBefore: now,
+      notAfter: now + 3600n,
+    };
+
+    const der = await alicePub.toCertDer(bobby, params);
+    expect(der.length).toBeGreaterThan(0);
+
+    const { key, notBefore, notAfter } = await PublicKey.fromCertDer(
+      der,
+      bobbyPub,
+    );
+    expect(toHex(key.toBytes())).toBe(toHex(alicePub.toBytes()));
+    expect(notBefore).toBe(now);
+    expect(notAfter).toBe(now + 3600n);
+  });
+
+  it("rejects certificate with wrong signer", async () => {
+    const alice = await SecretKey.generate();
+    const bobby = await SecretKey.generate();
+    const wrong = await SecretKey.generate();
+    const alicePub = await alice.publicKey();
+    const wrongPub = await wrong.publicKey();
+
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const params: Params = {
+      subjectName: "Alice",
+      issuerName: "Bobby",
+      notBefore: now,
+      notAfter: now + 3600n,
+    };
+
+    const pem = await alicePub.toCertPem(bobby, params);
+    await expect(PublicKey.fromCertPem(pem, wrongPub)).rejects.toThrow();
+  });
+
+  it("generates CA certificate with pathLen", async () => {
+    const ca = await SecretKey.generate();
+    const caPub = await ca.publicKey();
+
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const params: Params = {
+      subjectName: "CA",
+      issuerName: "CA",
+      notBefore: now,
+      notAfter: now + 86400n,
+      isCa: true,
+      pathLen: 0,
+    };
+
+    const pem = await caPub.toCertPem(ca, params);
+    expect(pem).toContain("-----BEGIN CERTIFICATE-----");
+
+    const { key } = await PublicKey.fromCertPem(pem, caPub);
+    expect(toHex(key.toBytes())).toBe(toHex(caPub.toBytes()));
   });
 });

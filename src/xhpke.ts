@@ -18,7 +18,17 @@ import init, {
   xhpke_secret_key_to_pem,
   xhpke_public_key_from_pem,
   xhpke_public_key_to_pem,
+  xhpke_public_key_from_cert_pem,
+  xhpke_public_key_from_cert_der,
+  xhpke_public_key_to_cert_pem,
+  xhpke_public_key_to_cert_der,
 } from "./wasm/darkbio_crypto_wasm.js";
+
+import {
+  PublicKey as XdsaPublicKey,
+  SecretKey as XdsaSecretKey,
+} from "./xdsa.js";
+import type { Params } from "./x509.js";
 
 let initialized = false;
 
@@ -115,6 +125,52 @@ export class PublicKey {
     return new PublicKey(bytes);
   }
 
+  /**
+   * Parses a public key from a PEM-encoded X.509 certificate.
+   * Verifies the certificate signature against the provided xDSA signer.
+   *
+   * @param pem - PEM-encoded X.509 certificate
+   * @param signer - The xDSA public key that signed this certificate
+   * @returns The parsed public key and validity period (notBefore, notAfter as Unix timestamps)
+   */
+  static async fromCertPem(
+    pem: string,
+    signer: XdsaPublicKey,
+  ): Promise<{ key: PublicKey; notBefore: bigint; notAfter: bigint }> {
+    await ensureInit();
+    const result = new Uint8Array(
+      xhpke_public_key_from_cert_pem(pem, signer.toBytes()),
+    );
+    const key = new PublicKey(result.slice(0, PUBLIC_KEY_SIZE));
+    const view = new DataView(result.buffer, result.byteOffset + PUBLIC_KEY_SIZE);
+    const notBefore = view.getBigUint64(0, false);
+    const notAfter = view.getBigUint64(8, false);
+    return { key, notBefore, notAfter };
+  }
+
+  /**
+   * Parses a public key from a DER-encoded X.509 certificate.
+   * Verifies the certificate signature against the provided xDSA signer.
+   *
+   * @param der - DER-encoded X.509 certificate
+   * @param signer - The xDSA public key that signed this certificate
+   * @returns The parsed public key and validity period (notBefore, notAfter as Unix timestamps)
+   */
+  static async fromCertDer(
+    der: Uint8Array,
+    signer: XdsaPublicKey,
+  ): Promise<{ key: PublicKey; notBefore: bigint; notAfter: bigint }> {
+    await ensureInit();
+    const result = new Uint8Array(
+      xhpke_public_key_from_cert_der(der, signer.toBytes()),
+    );
+    const key = new PublicKey(result.slice(0, PUBLIC_KEY_SIZE));
+    const view = new DataView(result.buffer, result.byteOffset + PUBLIC_KEY_SIZE);
+    const notBefore = view.getBigUint64(0, false);
+    const notAfter = view.getBigUint64(8, false);
+    return { key, notBefore, notAfter };
+  }
+
   /** Converts a public key into a 1216-byte array. */
   toBytes(): Uint8Array {
     return new Uint8Array(this.bytes);
@@ -150,6 +206,48 @@ export class PublicKey {
   ): Promise<Uint8Array> {
     await ensureInit();
     return new Uint8Array(xhpke_seal(this.bytes, msgToSeal, msgToAuth, domain));
+  }
+
+  /**
+   * Generates a PEM-encoded X.509 certificate for this public key.
+   * Note: HPKE certificates are always end-entity certificates.
+   *
+   * @param signer - The xDSA secret key to sign the certificate
+   * @param params - Certificate parameters (subject, issuer, validity)
+   * @returns PEM-encoded X.509 certificate
+   */
+  async toCertPem(signer: XdsaSecretKey, params: Params): Promise<string> {
+    await ensureInit();
+    return xhpke_public_key_to_cert_pem(
+      this.bytes,
+      signer.toBytes(),
+      params.subjectName,
+      params.issuerName,
+      params.notBefore,
+      params.notAfter,
+    );
+  }
+
+  /**
+   * Generates a DER-encoded X.509 certificate for this public key.
+   * Note: HPKE certificates are always end-entity certificates.
+   *
+   * @param signer - The xDSA secret key to sign the certificate
+   * @param params - Certificate parameters (subject, issuer, validity)
+   * @returns DER-encoded X.509 certificate
+   */
+  async toCertDer(signer: XdsaSecretKey, params: Params): Promise<Uint8Array> {
+    await ensureInit();
+    return new Uint8Array(
+      xhpke_public_key_to_cert_der(
+        this.bytes,
+        signer.toBytes(),
+        params.subjectName,
+        params.issuerName,
+        params.notBefore,
+        params.notAfter,
+      ),
+    );
   }
 }
 

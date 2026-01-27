@@ -18,7 +18,13 @@ import init, {
   xdsa_secret_key_to_pem,
   xdsa_public_key_from_pem,
   xdsa_public_key_to_pem,
+  xdsa_public_key_from_cert_pem,
+  xdsa_public_key_from_cert_der,
+  xdsa_public_key_to_cert_pem,
+  xdsa_public_key_to_cert_der,
 } from "./wasm/darkbio_crypto_wasm.js";
+
+import type { Params } from "./x509.js";
 
 let initialized = false;
 
@@ -135,6 +141,52 @@ export class PublicKey {
     return new PublicKey(bytes);
   }
 
+  /**
+   * Parses a public key from a PEM-encoded X.509 certificate.
+   * Verifies the certificate signature against the provided signer.
+   *
+   * @param pem - PEM-encoded X.509 certificate
+   * @param signer - The xDSA public key that signed this certificate
+   * @returns The parsed public key and validity period (notBefore, notAfter as Unix timestamps)
+   */
+  static async fromCertPem(
+    pem: string,
+    signer: PublicKey,
+  ): Promise<{ key: PublicKey; notBefore: bigint; notAfter: bigint }> {
+    await ensureInit();
+    const result = new Uint8Array(
+      xdsa_public_key_from_cert_pem(pem, signer.toBytes()),
+    );
+    const key = new PublicKey(result.slice(0, PUBLIC_KEY_SIZE));
+    const view = new DataView(result.buffer, result.byteOffset + PUBLIC_KEY_SIZE);
+    const notBefore = view.getBigUint64(0, false);
+    const notAfter = view.getBigUint64(8, false);
+    return { key, notBefore, notAfter };
+  }
+
+  /**
+   * Parses a public key from a DER-encoded X.509 certificate.
+   * Verifies the certificate signature against the provided signer.
+   *
+   * @param der - DER-encoded X.509 certificate
+   * @param signer - The xDSA public key that signed this certificate
+   * @returns The parsed public key and validity period (notBefore, notAfter as Unix timestamps)
+   */
+  static async fromCertDer(
+    der: Uint8Array,
+    signer: PublicKey,
+  ): Promise<{ key: PublicKey; notBefore: bigint; notAfter: bigint }> {
+    await ensureInit();
+    const result = new Uint8Array(
+      xdsa_public_key_from_cert_der(der, signer.toBytes()),
+    );
+    const key = new PublicKey(result.slice(0, PUBLIC_KEY_SIZE));
+    const view = new DataView(result.buffer, result.byteOffset + PUBLIC_KEY_SIZE);
+    const notBefore = view.getBigUint64(0, false);
+    const notAfter = view.getBigUint64(8, false);
+    return { key, notBefore, notAfter };
+  }
+
   /** Converts a public key into a 1984-byte array. */
   toBytes(): Uint8Array {
     return new Uint8Array(this.bytes);
@@ -157,6 +209,50 @@ export class PublicKey {
   async verify(message: Uint8Array, signature: Signature): Promise<boolean> {
     await ensureInit();
     return xdsa_verify(this.bytes, message, signature.toBytes());
+  }
+
+  /**
+   * Generates a PEM-encoded X.509 certificate for this public key.
+   *
+   * @param signer - The xDSA secret key to sign the certificate
+   * @param params - Certificate parameters (subject, issuer, validity, etc.)
+   * @returns PEM-encoded X.509 certificate
+   */
+  async toCertPem(signer: SecretKey, params: Params): Promise<string> {
+    await ensureInit();
+    return xdsa_public_key_to_cert_pem(
+      this.bytes,
+      signer.toBytes(),
+      params.subjectName,
+      params.issuerName,
+      params.notBefore,
+      params.notAfter,
+      params.isCa ?? false,
+      params.pathLen,
+    );
+  }
+
+  /**
+   * Generates a DER-encoded X.509 certificate for this public key.
+   *
+   * @param signer - The xDSA secret key to sign the certificate
+   * @param params - Certificate parameters (subject, issuer, validity, etc.)
+   * @returns DER-encoded X.509 certificate
+   */
+  async toCertDer(signer: SecretKey, params: Params): Promise<Uint8Array> {
+    await ensureInit();
+    return new Uint8Array(
+      xdsa_public_key_to_cert_der(
+        this.bytes,
+        signer.toBytes(),
+        params.subjectName,
+        params.issuerName,
+        params.notBefore,
+        params.notAfter,
+        params.isCa ?? false,
+        params.pathLen,
+      ),
+    );
   }
 }
 
