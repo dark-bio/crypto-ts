@@ -1,6 +1,6 @@
 {
   "name": "@darkbio/crypto",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "Péter Szilágyi <peter@dark.bio>",
   "description": "Cryptography primitives and wrappers",
   "repository": {
