@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "author": "Péter Szilágyi <peter@dark.bio>",
   "description": "Cryptography primitives and wrappers",
-  "repository": "https://github.com/dark-bio/crypto-ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dark-bio/crypto-ts.git"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
