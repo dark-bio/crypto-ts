@@ -16,12 +16,6 @@ import init, {
   XhpkeReceiver as WasmReceiver,
 } from "./wasm/darkbio_crypto_wasm.js";
 
-import {
-  PublicKey as XdsaPublicKey,
-  SecretKey as XdsaSecretKey,
-} from "./xdsa.js";
-import type { Params } from "./x509.js";
-
 let initialized = false;
 
 async function ensureInit(): Promise<void> {
@@ -111,38 +105,6 @@ export class PublicKey {
     return new PublicKey(WasmPublicKey.from_pem(pem));
   }
 
-  /**
-   * Parses a public key from a PEM-encoded X.509 certificate.
-   * Verifies the certificate signature against the provided xDSA signer.
-   */
-  static async fromCertPem(
-    pem: string,
-    signer: XdsaPublicKey,
-  ): Promise<{ key: PublicKey; notBefore: bigint; notAfter: bigint }> {
-    await ensureInit();
-    const result = WasmPublicKey.from_cert_pem(pem, signer._wasm);
-    const notBefore = BigInt(result.not_before());
-    const notAfter = BigInt(result.not_after());
-    const key = new PublicKey(result.into_key());
-    return { key, notBefore, notAfter };
-  }
-
-  /**
-   * Parses a public key from a DER-encoded X.509 certificate.
-   * Verifies the certificate signature against the provided xDSA signer.
-   */
-  static async fromCertDer(
-    der: Uint8Array,
-    signer: XdsaPublicKey,
-  ): Promise<{ key: PublicKey; notBefore: bigint; notAfter: bigint }> {
-    await ensureInit();
-    const result = WasmPublicKey.from_cert_der(der, signer._wasm);
-    const notBefore = BigInt(result.not_before());
-    const notAfter = BigInt(result.not_after());
-    const key = new PublicKey(result.into_key());
-    return { key, notBefore, notAfter };
-  }
-
   /** Converts a public key into a 1216-byte array. */
   toBytes(): Uint8Array {
     return new Uint8Array(this._wasm.to_bytes());
@@ -189,38 +151,6 @@ export class PublicKey {
   ): Promise<Uint8Array> {
     await ensureInit();
     return new Uint8Array(this._wasm.seal(msgToSeal, msgToAuth, domain));
-  }
-
-  /**
-   * Generates a PEM-encoded X.509 certificate for this public key.
-   * Note: HPKE certificates are always end-entity certificates.
-   */
-  async toCertPem(signer: XdsaSecretKey, params: Params): Promise<string> {
-    await ensureInit();
-    return this._wasm.to_cert_pem(
-      signer._wasm,
-      params.subjectName,
-      params.issuerName,
-      params.notBefore,
-      params.notAfter,
-    );
-  }
-
-  /**
-   * Generates a DER-encoded X.509 certificate for this public key.
-   * Note: HPKE certificates are always end-entity certificates.
-   */
-  async toCertDer(signer: XdsaSecretKey, params: Params): Promise<Uint8Array> {
-    await ensureInit();
-    return new Uint8Array(
-      this._wasm.to_cert_der(
-        signer._wasm,
-        params.subjectName,
-        params.issuerName,
-        params.notBefore,
-        params.notAfter,
-      ),
-    );
   }
 }
 

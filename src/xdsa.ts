@@ -15,8 +15,6 @@ import init, {
   XdsaFingerprint as WasmFingerprint,
 } from "./wasm/darkbio_crypto_wasm.js";
 
-import type { Params } from "./x509.js";
-
 let initialized = false;
 
 async function ensureInit(): Promise<void> {
@@ -132,38 +130,6 @@ export class PublicKey {
     return new PublicKey(WasmPublicKey.from_pem(pem));
   }
 
-  /**
-   * Parses a public key from a PEM-encoded X.509 certificate.
-   * Verifies the certificate signature against the provided signer.
-   */
-  static async fromCertPem(
-    pem: string,
-    signer: PublicKey,
-  ): Promise<{ key: PublicKey; notBefore: bigint; notAfter: bigint }> {
-    await ensureInit();
-    const result = WasmPublicKey.from_cert_pem(pem, signer._wasm);
-    const notBefore = BigInt(result.not_before());
-    const notAfter = BigInt(result.not_after());
-    const key = new PublicKey(result.into_key());
-    return { key, notBefore, notAfter };
-  }
-
-  /**
-   * Parses a public key from a DER-encoded X.509 certificate.
-   * Verifies the certificate signature against the provided signer.
-   */
-  static async fromCertDer(
-    der: Uint8Array,
-    signer: PublicKey,
-  ): Promise<{ key: PublicKey; notBefore: bigint; notAfter: bigint }> {
-    await ensureInit();
-    const result = WasmPublicKey.from_cert_der(der, signer._wasm);
-    const notBefore = BigInt(result.not_before());
-    const notAfter = BigInt(result.not_after());
-    const key = new PublicKey(result.into_key());
-    return { key, notBefore, notAfter };
-  }
-
   /** Converts a public key into a 1984-byte array. */
   toBytes(): Uint8Array {
     return new Uint8Array(this._wasm.to_bytes());
@@ -185,40 +151,6 @@ export class PublicKey {
   async verify(message: Uint8Array, signature: Signature): Promise<boolean> {
     await ensureInit();
     return this._wasm.verify(message, signature._wasm);
-  }
-
-  /**
-   * Generates a PEM-encoded X.509 certificate for this public key.
-   */
-  async toCertPem(signer: SecretKey, params: Params): Promise<string> {
-    await ensureInit();
-    return this._wasm.to_cert_pem(
-      signer._wasm,
-      params.subjectName,
-      params.issuerName,
-      params.notBefore,
-      params.notAfter,
-      params.isCa ?? false,
-      params.pathLen,
-    );
-  }
-
-  /**
-   * Generates a DER-encoded X.509 certificate for this public key.
-   */
-  async toCertDer(signer: SecretKey, params: Params): Promise<Uint8Array> {
-    await ensureInit();
-    return new Uint8Array(
-      this._wasm.to_cert_der(
-        signer._wasm,
-        params.subjectName,
-        params.issuerName,
-        params.notBefore,
-        params.notAfter,
-        params.isCa ?? false,
-        params.pathLen,
-      ),
-    );
   }
 }
 

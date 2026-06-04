@@ -11,8 +11,6 @@
 use darkbio_crypto::xhpke;
 use wasm_bindgen::prelude::*;
 
-use crate::xdsa::{XdsaPublicKey, XdsaSecretKey};
-
 /// Size of the secret key seed in bytes.
 #[wasm_bindgen]
 pub fn xhpke_secret_key_size() -> usize {
@@ -76,7 +74,7 @@ impl XhpkeSecretKey {
 
     /// Serializes the secret key to PEM format.
     pub fn to_pem(&self) -> String {
-        self.inner.to_pem()
+        self.inner.to_pem().to_string()
     }
 
     /// Returns the public key corresponding to this private key.
@@ -154,36 +152,6 @@ impl XhpkePublicKey {
         })
     }
 
-    /// Parses a public key from a PEM-encoded X.509 certificate, verifying the signature.
-    pub fn from_cert_pem(pem: &str, signer: &XdsaPublicKey) -> Result<XhpkeCertResult, JsError> {
-        use darkbio_crypto::x509;
-
-        let verified = xhpke::verify_cert_pem(pem, &signer.inner, x509::ValidityCheck::Disabled)
-            .map_err(|e| JsError::new(&e.to_string()))?;
-
-        Ok(XhpkeCertResult {
-            key: xhpke::PublicKey::from_bytes(&verified.public_key.to_bytes())
-                .map_err(|e| JsError::new(&e.to_string()))?,
-            not_before: verified.cert.not_before,
-            not_after: verified.cert.not_after,
-        })
-    }
-
-    /// Parses a public key from a DER-encoded X.509 certificate, verifying the signature.
-    pub fn from_cert_der(der: &[u8], signer: &XdsaPublicKey) -> Result<XhpkeCertResult, JsError> {
-        use darkbio_crypto::x509;
-
-        let verified = xhpke::verify_cert_der(der, &signer.inner, x509::ValidityCheck::Disabled)
-            .map_err(|e| JsError::new(&e.to_string()))?;
-
-        Ok(XhpkeCertResult {
-            key: xhpke::PublicKey::from_bytes(&verified.public_key.to_bytes())
-                .map_err(|e| JsError::new(&e.to_string()))?,
-            not_before: verified.cert.not_before,
-            not_after: verified.cert.not_after,
-        })
-    }
-
     /// Serializes the public key to a 1216-byte array.
     pub fn to_bytes(&self) -> Vec<u8> {
         self.inner.to_bytes().to_vec()
@@ -231,77 +199,6 @@ impl XhpkePublicKey {
         result.extend_from_slice(&encap_key);
         result.extend_from_slice(&ciphertext);
         Ok(result)
-    }
-
-    /// Generates a PEM-encoded X.509 certificate for this public key.
-    pub fn to_cert_pem(
-        &self,
-        signer: &XdsaSecretKey,
-        subject_name: &str,
-        issuer_name: &str,
-        not_before: u64,
-        not_after: u64,
-    ) -> Result<String, JsError> {
-        use darkbio_crypto::x509;
-
-        let template = x509::Certificate {
-            subject: x509::Name::new().cn(subject_name),
-            issuer: x509::Name::new().cn(issuer_name),
-            not_before,
-            not_after,
-            role: x509::Role::Leaf,
-            ..Default::default()
-        };
-        xhpke::issue_cert_pem(&self.inner, &signer.inner, &template)
-            .map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    /// Generates a DER-encoded X.509 certificate for this public key.
-    pub fn to_cert_der(
-        &self,
-        signer: &XdsaSecretKey,
-        subject_name: &str,
-        issuer_name: &str,
-        not_before: u64,
-        not_after: u64,
-    ) -> Result<Vec<u8>, JsError> {
-        use darkbio_crypto::x509;
-
-        let template = x509::Certificate {
-            subject: x509::Name::new().cn(subject_name),
-            issuer: x509::Name::new().cn(issuer_name),
-            not_before,
-            not_after,
-            role: x509::Role::Leaf,
-            ..Default::default()
-        };
-        xhpke::issue_cert_der(&self.inner, &signer.inner, &template)
-            .map_err(|e| JsError::new(&e.to_string()))
-    }
-}
-
-/// Result from parsing an X.509 certificate. Read timestamps first, then
-/// call `into_key()` to extract the public key (consuming this result).
-#[wasm_bindgen]
-pub struct XhpkeCertResult {
-    #[wasm_bindgen(skip)]
-    key: xhpke::PublicKey,
-    #[wasm_bindgen(skip)]
-    not_before: u64,
-    #[wasm_bindgen(skip)]
-    not_after: u64,
-}
-
-#[wasm_bindgen]
-impl XhpkeCertResult {
-    pub fn not_before(&self) -> u64 {
-        self.not_before
-    }
-    pub fn not_after(&self) -> u64 {
-        self.not_after
-    }
-    pub fn into_key(self) -> XhpkePublicKey {
-        XhpkePublicKey { inner: self.key }
     }
 }
 
