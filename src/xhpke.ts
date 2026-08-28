@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import init, {
+import {
   xhpke_secret_key_size,
   xhpke_public_key_size,
   xhpke_encap_key_size,
@@ -15,15 +15,7 @@ import init, {
   XhpkeSender as WasmSender,
   XhpkeReceiver as WasmReceiver,
 } from "./wasm/darkbio_crypto_wasm.js";
-
-let initialized = false;
-
-async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
-}
+import { ensureInit } from "./init.js";
 
 /** Size of the secret key seed in bytes (32). */
 export const SECRET_KEY_SIZE = 32;
@@ -111,14 +103,12 @@ export class PublicKey {
   }
 
   /** Serializes a public key into a PEM string. */
-  async toPem(): Promise<string> {
-    await ensureInit();
+  toPem(): string {
     return this._wasm.to_pem();
   }
 
   /** Returns a 256-bit unique identifier for this key (SHA256 of raw public key). */
-  async fingerprint(): Promise<Fingerprint> {
-    await ensureInit();
+  fingerprint(): Fingerprint {
     return new Fingerprint(this._wasm.fingerprint());
   }
 
@@ -127,10 +117,7 @@ export class PublicKey {
    * public key. Returns a stateful Sender and the 1120-byte encapsulated
    * key that must be transmitted to the recipient.
    */
-  async newSender(
-    domain: Uint8Array,
-  ): Promise<{ sender: Sender; encapKey: Uint8Array }> {
-    await ensureInit();
+  newSender(domain: Uint8Array): { sender: Sender; encapKey: Uint8Array } {
     const wasmSender = this._wasm.new_sender(domain);
     const encapKey = new Uint8Array(wasmSender.encap_key());
     return { sender: new Sender(wasmSender), encapKey };
@@ -144,12 +131,11 @@ export class PublicKey {
    * @param domain - Application domain for context separation
    * @returns Sealed data (encapsulated key + ciphertext)
    */
-  async seal(
+  seal(
     msgToSeal: Uint8Array,
     msgToAuth: Uint8Array,
     domain: Uint8Array,
-  ): Promise<Uint8Array> {
-    await ensureInit();
+  ): Uint8Array {
     return new Uint8Array(this._wasm.seal(msgToSeal, msgToAuth, domain));
   }
 }
@@ -191,31 +177,24 @@ export class SecretKey {
   }
 
   /** Serializes a private key into a PEM string. */
-  async toPem(): Promise<string> {
-    await ensureInit();
+  toPem(): string {
     return this._wasm.to_pem();
   }
 
   /** Retrieves the public counterpart of the secret key. */
-  async publicKey(): Promise<PublicKey> {
-    await ensureInit();
+  publicKey(): PublicKey {
     return new PublicKey(this._wasm.public_key());
   }
 
   /** Returns a 256-bit unique identifier for this key (SHA256 of raw public key). */
-  async fingerprint(): Promise<Fingerprint> {
-    const pk = await this.publicKey();
-    return pk.fingerprint();
+  fingerprint(): Fingerprint {
+    return new Fingerprint(this._wasm.fingerprint());
   }
 
   /**
    * Creates an HPKE receiver context for multi-message decryption.
    */
-  async newReceiver(
-    encapKey: Uint8Array,
-    domain: Uint8Array,
-  ): Promise<Receiver> {
-    await ensureInit();
+  newReceiver(encapKey: Uint8Array, domain: Uint8Array): Receiver {
     return new Receiver(this._wasm.new_receiver(encapKey, domain));
   }
 
@@ -227,12 +206,11 @@ export class SecretKey {
    * @param domain - The same application domain used during sealing
    * @returns The decrypted message
    */
-  async open(
+  open(
     sealed: Uint8Array,
     msgToAuth: Uint8Array,
     domain: Uint8Array,
-  ): Promise<Uint8Array> {
-    await ensureInit();
+  ): Uint8Array {
     return new Uint8Array(this._wasm.open(sealed, msgToAuth, domain));
   }
 }
@@ -250,11 +228,7 @@ export class Sender {
   }
 
   /** Encrypts a message using the next nonce in the sequence. */
-  async seal(
-    msgToSeal: Uint8Array,
-    msgToAuth: Uint8Array,
-  ): Promise<Uint8Array> {
-    await ensureInit();
+  seal(msgToSeal: Uint8Array, msgToAuth: Uint8Array): Uint8Array {
     return new Uint8Array(this.inner.seal(msgToSeal, msgToAuth));
   }
 }
@@ -272,11 +246,7 @@ export class Receiver {
   }
 
   /** Decrypts a message using the next nonce in the sequence. */
-  async open(
-    msgToOpen: Uint8Array,
-    msgToAuth: Uint8Array,
-  ): Promise<Uint8Array> {
-    await ensureInit();
+  open(msgToOpen: Uint8Array, msgToAuth: Uint8Array): Uint8Array {
     return new Uint8Array(this.inner.open(msgToOpen, msgToAuth));
   }
 }

@@ -86,7 +86,7 @@ describe("xhpke", () => {
 
     const sealed = await pk1.seal(message, aad, domain);
 
-    await expect(sk2.open(sealed, aad, domain)).rejects.toThrow();
+    expect(() => sk2.open(sealed, aad, domain)).toThrow();
   });
 
   it("fails to open with wrong AAD", async () => {
@@ -99,7 +99,7 @@ describe("xhpke", () => {
 
     const sealed = await pk.seal(message, aad1, domain);
 
-    await expect(sk.open(sealed, aad2, domain)).rejects.toThrow();
+    expect(() => sk.open(sealed, aad2, domain)).toThrow();
   });
 
   it("fails to open with wrong domain", async () => {
@@ -112,7 +112,7 @@ describe("xhpke", () => {
 
     const sealed = await pk.seal(message, aad, domain1);
 
-    await expect(sk.open(sealed, aad, domain2)).rejects.toThrow();
+    expect(() => sk.open(sealed, aad, domain2)).toThrow();
   });
 
   it("roundtrips secret key through PEM", async () => {
@@ -263,7 +263,7 @@ describe("xhpke", () => {
       // Wrong key: receiver creation may succeed (KEM decap produces a
       // different shared secret), but open will fail.
       const receiver = await sk2.newReceiver(encapKey, domain);
-      await expect(receiver.open(ct, aad)).rejects.toThrow();
+      expect(() => receiver.open(ct, aad)).toThrow();
     });
 
     it("fails to decrypt with wrong AAD", async () => {
@@ -279,9 +279,9 @@ describe("xhpke", () => {
         new TextEncoder().encode("aad1"),
       );
 
-      await expect(
+      expect(() =>
         receiver.open(ct, new TextEncoder().encode("aad2")),
-      ).rejects.toThrow();
+      ).toThrow();
     });
 
     it("fails to decrypt with wrong domain", async () => {
@@ -300,7 +300,7 @@ describe("xhpke", () => {
         encapKey,
         new TextEncoder().encode("domain2"),
       );
-      await expect(receiver.open(ct, aad)).rejects.toThrow();
+      expect(() => receiver.open(ct, aad)).toThrow();
     });
 
     it("handles empty messages", async () => {

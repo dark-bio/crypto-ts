@@ -24,4 +24,9 @@ describe("rand", () => {
     const result = await generate(1024);
     expect(result.length).toBe(1024);
   });
+
+  it("rejects oversized requests", async () => {
+    await expect(generate(64 * 1024 * 1024 + 1)).rejects.toThrow();
+    await expect(generate(-1)).rejects.toThrow();
+  });
 });

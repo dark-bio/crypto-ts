@@ -20,7 +20,15 @@ function cborDecode<T>(data: Uint8Array): T {
   return cborDecodeRaw(data, { useMaps: true }) as T;
 }
 
-import init, {
+function driftToBigInt(maxDriftSecs?: number): bigint | undefined {
+  if (maxDriftSecs === undefined) return undefined;
+  if (!Number.isFinite(maxDriftSecs) || maxDriftSecs < 0) {
+    throw new Error("maxDriftSecs must be a non-negative number");
+  }
+  return BigInt(Math.floor(maxDriftSecs));
+}
+
+import {
   cose_sign,
   cose_sign_detached,
   cose_verify,
@@ -33,15 +41,7 @@ import init, {
   cose_encrypt,
   cose_decrypt,
 } from "./wasm/darkbio_crypto_wasm.js";
-
-let initialized = false;
-
-async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
-}
+import { ensureInit } from "./init.js";
 
 /**
  * Create a COSE_Sign1 signature with an embedded payload.
@@ -73,6 +73,9 @@ export async function signDetached<A>(
 
 /**
  * Verify a COSE_Sign1 signature and return the embedded payload.
+ *
+ * CBOR maps in the payload decode as `Map` objects, not plain objects, so a
+ * payload signed from a plain object comes back as a `Map`.
  */
 export async function verify<T, A>(
   msgToCheck: Uint8Array,
@@ -88,7 +91,7 @@ export async function verify<T, A>(
     authBytes,
     verifier._wasm,
     domain,
-    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined,
+    driftToBigInt(maxDriftSecs),
   );
   return cborDecode(new Uint8Array(payloadBytes)) as T;
 }
@@ -110,7 +113,7 @@ export async function verifyDetached<A>(
     authBytes,
     verifier._wasm,
     domain,
-    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined,
+    driftToBigInt(maxDriftSecs),
   );
 }
 
@@ -127,6 +130,8 @@ export async function signer(signature: Uint8Array): Promise<XdsaFingerprint> {
  *
  * Warning: The returned payload is unauthenticated and should not be
  * trusted until verified with `verify`.
+ *
+ * CBOR maps in the payload decode as `Map` objects, not plain objects.
  */
 export async function peek<T>(signature: Uint8Array): Promise<T> {
   await ensureInit();
@@ -170,6 +175,9 @@ export async function seal<S, A>(
 
 /**
  * Decrypt and verify a sealed message.
+ *
+ * CBOR maps in the payload decode as `Map` objects, not plain objects, so a
+ * payload sealed from a plain object comes back as a `Map`.
  */
 export async function open<T, A>(
   msgToOpen: Uint8Array,
@@ -187,7 +195,7 @@ export async function open<T, A>(
     recipientKey._wasm,
     senderKey._wasm,
     domain,
-    maxDriftSecs !== undefined ? BigInt(maxDriftSecs) : undefined,
+    driftToBigInt(maxDriftSecs),
   );
   return cborDecode(new Uint8Array(payloadBytes)) as T;
 }

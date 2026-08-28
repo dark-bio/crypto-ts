@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import init, {
+import {
   xdsa_secret_key_size,
   xdsa_public_key_size,
   xdsa_signature_size,
@@ -14,15 +14,7 @@ import init, {
   XdsaSignature as WasmSignature,
   XdsaFingerprint as WasmFingerprint,
 } from "./wasm/darkbio_crypto_wasm.js";
-
-let initialized = false;
-
-async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
-}
+import { ensureInit } from "./init.js";
 
 /** Size of the secret key in bytes (64). */
 export const SECRET_KEY_SIZE = 64;
@@ -136,20 +128,21 @@ export class PublicKey {
   }
 
   /** Serializes a public key into a PEM string. */
-  async toPem(): Promise<string> {
-    await ensureInit();
+  toPem(): string {
     return this._wasm.to_pem();
   }
 
   /** Returns a 256-bit unique identifier for this key. */
-  async fingerprint(): Promise<Fingerprint> {
-    await ensureInit();
+  fingerprint(): Fingerprint {
     return new Fingerprint(this._wasm.fingerprint());
   }
 
-  /** Verifies a digital signature of the message. */
-  async verify(message: Uint8Array, signature: Signature): Promise<boolean> {
-    await ensureInit();
+  /**
+   * Verifies a digital signature of the message.
+   *
+   * @returns true if the signature is valid, false otherwise (never throws)
+   */
+  verify(message: Uint8Array, signature: Signature): boolean {
     return this._wasm.verify(message, signature._wasm);
   }
 }
@@ -192,26 +185,22 @@ export class SecretKey {
   }
 
   /** Serializes a private key into a PEM string. */
-  async toPem(): Promise<string> {
-    await ensureInit();
+  toPem(): string {
     return this._wasm.to_pem();
   }
 
   /** Retrieves the public counterpart of the secret key. */
-  async publicKey(): Promise<PublicKey> {
-    await ensureInit();
+  publicKey(): PublicKey {
     return new PublicKey(this._wasm.public_key());
   }
 
   /** Returns a 256-bit unique identifier for this key. */
-  async fingerprint(): Promise<Fingerprint> {
-    await ensureInit();
+  fingerprint(): Fingerprint {
     return new Fingerprint(this._wasm.fingerprint());
   }
 
   /** Creates a digital signature of the message. */
-  async sign(message: Uint8Array): Promise<Signature> {
-    await ensureInit();
+  sign(message: Uint8Array): Signature {
     return new Signature(this._wasm.sign(message));
   }
 }

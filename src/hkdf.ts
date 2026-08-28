@@ -4,20 +4,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import init, {
+import {
   hkdf_key,
   hkdf_extract,
   hkdf_expand,
 } from "./wasm/darkbio_crypto_wasm.js";
-
-let initialized = false;
-
-async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
-}
+import { ensureInit } from "./init.js";
 
 /**
  * Derive a key from secret, salt, and info using HKDF-SHA256.

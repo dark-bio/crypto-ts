@@ -4,16 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import init, { argon2_key } from "./wasm/darkbio_crypto_wasm.js";
-
-let initialized = false;
-
-async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
-}
+import { argon2_key } from "./wasm/darkbio_crypto_wasm.js";
+import { ensureInit } from "./init.js";
 
 /**
  * Derive a key from password, salt, and cost parameters using Argon2id.
@@ -22,7 +14,7 @@ async function ensureInit(): Promise<void> {
  * defaults. If that much memory isn't available, increase time to compensate.
  *
  * @param password - The password to derive from
- * @param salt - A random salt (should be at least 16 bytes)
+ * @param salt - A random salt (min 8 bytes, at least 16 recommended)
  * @param time - Number of passes over memory (iterations)
  * @param memory - Memory size in KiB
  * @param threads - Degree of parallelism

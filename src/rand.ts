@@ -4,21 +4,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import init, { rand_generate } from "./wasm/darkbio_crypto_wasm.js";
-
-let initialized = false;
-
-async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
-}
+import { rand_generate } from "./wasm/darkbio_crypto_wasm.js";
+import { ensureInit } from "./init.js";
 
 /**
  * Generate cryptographically secure random bytes.
  *
- * @param bytes - Number of random bytes to generate
+ * @param bytes - Number of random bytes to generate (max 64 MiB)
  * @returns A Uint8Array containing the random bytes
  */
 export async function generate(bytes: number): Promise<Uint8Array> {

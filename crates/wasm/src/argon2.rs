@@ -10,6 +10,26 @@
 
 use wasm_bindgen::prelude::*;
 
+/// Minimum salt length in bytes, per the argon2 crate's hashing bounds.
+const MIN_SALT_LEN: usize = 8;
+
+/// Minimum memory cost in KiB (2 blocks per slice, 4 slices), per the argon2
+/// crate's Params bounds.
+const MIN_MEMORY_KIB: u32 = 8;
+
+/// Maximum memory cost in KiB (2 GiB). Matches the RFC 9106 recommended upper
+/// bound and keeps allocations within WASM's 32-bit address space; anything
+/// larger would abort the instance on allocation failure instead of erroring.
+const MAX_MEMORY_KIB: u32 = 2 * 1024 * 1024;
+
+/// Maximum degree of parallelism. The argon2 crate rounds the memory cost up
+/// to 8 blocks per lane, so the lane count must also respect the memory cap
+/// (far above any real parallelism need either way).
+const MAX_THREADS: u32 = MAX_MEMORY_KIB / 8;
+
+/// Minimum output length in bytes, per the argon2 crate's Params bounds.
+const MIN_OUTPUT_LEN: usize = 4;
+
 /// Derives a key from the password, salt, and cost parameters using Argon2id,
 /// returning a byte array that can be used as a cryptographic key. The CPU cost
 /// and parallelism degree must be greater than zero.
@@ -23,6 +43,9 @@ use wasm_bindgen::prelude::*;
 /// can be adjusted to the numbers of available CPUs. The cost parameters should be
 /// increased as memory latency and CPU parallelism increases. Remember to get a
 /// good random salt.
+///
+/// All parameters are validated up front: the underlying implementation panics
+/// on invalid inputs, which inside WASM would trap and poison the instance.
 #[wasm_bindgen]
 pub fn argon2_key(
     password: &[u8],
@@ -31,6 +54,26 @@ pub fn argon2_key(
     memory: u32,
     threads: u32,
     out_len: usize,
-) -> Vec<u8> {
-    darkbio_crypto::argon2::key_with_len(password, salt, time, memory, threads, out_len)
+) -> Result<Vec<u8>, JsError> {
+    if salt.len() < MIN_SALT_LEN {
+        return Err(JsError::new("salt must be at least 8 bytes"));
+    }
+    if memory < MIN_MEMORY_KIB {
+        return Err(JsError::new("memory cost must be at least 8 KiB"));
+    }
+    if memory > MAX_MEMORY_KIB {
+        return Err(JsError::new("memory cost must be at most 2097152 KiB"));
+    }
+    if time < 1 {
+        return Err(JsError::new("time cost must be at least 1"));
+    }
+    if threads < 1 || threads > MAX_THREADS {
+        return Err(JsError::new("threads must be between 1 and 262144"));
+    }
+    if out_len < MIN_OUTPUT_LEN {
+        return Err(JsError::new("output length must be at least 4 bytes"));
+    }
+    Ok(darkbio_crypto::argon2::key_with_len(
+        password, salt, time, memory, threads, out_len,
+    ))
 }

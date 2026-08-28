@@ -41,6 +41,22 @@ describe("cwt", () => {
       expect(verified.expiration).toBe(2000000);
     });
 
+    it("accepts a fractional now timestamp", async () => {
+      const issuerKey = await XdsaSecretKey.generate();
+      const issuerPub = await issuerKey.publicKey();
+      const domain = new TextEncoder().encode("test-domain");
+
+      const claims = new Claims();
+      claims.notBefore = 1000000;
+      claims.expiration = 2000000;
+
+      const token = await issue(claims, issuerKey, domain);
+      const verified = await verify(token, issuerPub, domain, 1500000.5);
+      expect(verified.notBefore).toBe(1000000);
+
+      await expect(verify(token, issuerPub, domain, -1)).rejects.toThrow();
+    });
+
     it("roundtrips all standard CWT claims", async () => {
       const issuerKey = await XdsaSecretKey.generate();
       const issuerPub = await issuerKey.publicKey();

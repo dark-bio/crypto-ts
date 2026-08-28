@@ -25,13 +25,13 @@
  * claims.subject = "device-abc";
  * claims.notBefore = 1000000;
  * claims.expiration = 2000000;
- * claims.setConfirmXdsa(await deviceKey.publicKey());
+ * claims.setConfirmXdsa(deviceKey.publicKey());
  *
  * const domain = new TextEncoder().encode("device-cert");
  * const token = await cwt.issue(claims, issuerKey, domain);
  *
  * // Verify a token
- * const verified = await cwt.verify(token, await issuerKey.publicKey(), domain, 1500000);
+ * const verified = await cwt.verify(token, issuerKey.publicKey(), domain, 1500000);
  * console.log(verified.subject); // "device-abc"
  * ```
  *
@@ -39,27 +39,19 @@
  */
 
 import { encode as cborEncode, decode as cborDecodeRaw } from "cborg";
-import init, {
+import {
   cwt_issue,
   cwt_verify,
   cwt_signer,
   cwt_peek,
 } from "./wasm/darkbio_crypto_wasm.js";
+import { ensureInit } from "./init.js";
 import {
   SecretKey as XdsaSecretKey,
   PublicKey as XdsaPublicKey,
   Fingerprint as XdsaFingerprint,
 } from "./xdsa.js";
 import { PublicKey as XhpkePublicKey } from "./xhpke.js";
-
-let initialized = false;
-
-async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
-}
 
 // COSE algorithm identifiers used in Confirm claim encoding.
 const ALGORITHM_ID_XDSA = -70000;
@@ -474,14 +466,14 @@ export async function verify(
   now?: number,
 ): Promise<Claims> {
   await ensureInit();
-  if (now !== undefined && now < 0) {
+  if (now !== undefined && (!Number.isFinite(now) || now < 0)) {
     throw new Error("now must be a non-negative Unix timestamp");
   }
   const claimsCbor = cwt_verify(
     token,
     verifier._wasm,
     domain,
-    now !== undefined ? BigInt(now) : undefined,
+    now !== undefined ? BigInt(Math.floor(now)) : undefined,
   );
   return Claims.decode(new Uint8Array(claimsCbor));
 }

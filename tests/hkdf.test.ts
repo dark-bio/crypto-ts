@@ -80,4 +80,17 @@ describe("hkdf", () => {
 
     expect(toHex(expanded)).toBe(toHex(direct));
   });
+
+  // Test output lengths beyond the SHA-256 HKDF maximum are rejected
+  it("rejects output lengths beyond 8160", async () => {
+    const secret = fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+    const salt = fromHex("000102030405060708090a0b0c");
+    const info = fromHex("f0f1f2f3f4f5f6f7f8f9");
+
+    expect((await key(secret, salt, info, 8160)).length).toBe(8160);
+    await expect(key(secret, salt, info, 8161)).rejects.toThrow();
+
+    const prk = await extract(secret, salt);
+    await expect(expand(prk, info, 8161)).rejects.toThrow();
+  });
 });

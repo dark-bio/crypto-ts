@@ -69,4 +69,14 @@ describe("argon2", () => {
 
     expect(toHex(result1)).not.toBe(toHex(result2));
   });
+
+  it("rejects invalid parameters", async () => {
+    const short = new TextEncoder().encode("salt");
+
+    await expect(key(password, short, 1, 64, 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 0, 64, 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 4, 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 64, 0, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 64, 1, 3)).rejects.toThrow();
+  });
 });

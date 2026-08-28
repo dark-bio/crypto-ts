@@ -100,7 +100,7 @@ impl XhpkeSecretKey {
         let receiver = self
             .inner
             .new_receiver(&encap_key_array, domain)
-            .map_err(|e| JsError::new(&format!("new_receiver failed: {:?}", e)))?;
+            .map_err(|e| JsError::new(&e.to_string()))?;
 
         Ok(XhpkeReceiver { inner: receiver })
     }
@@ -123,7 +123,7 @@ impl XhpkeSecretKey {
 
         self.inner
             .open(&session_key, ciphertext, msg_to_auth, domain)
-            .map_err(|e| JsError::new(&format!("open failed: {:?}", e)))
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 }
 
@@ -174,7 +174,7 @@ impl XhpkePublicKey {
         let (sender, encap_key) = self
             .inner
             .new_sender(domain)
-            .map_err(|e| JsError::new(&format!("new_sender failed: {:?}", e)))?;
+            .map_err(|e| JsError::new(&e.to_string()))?;
 
         Ok(XhpkeSender {
             inner: sender,
@@ -193,7 +193,7 @@ impl XhpkePublicKey {
         let (encap_key, ciphertext) = self
             .inner
             .seal(msg_to_seal, msg_to_auth, domain)
-            .map_err(|e| JsError::new(&format!("seal failed: {:?}", e)))?;
+            .map_err(|e| JsError::new(&e.to_string()))?;
 
         let mut result = Vec::with_capacity(encap_key.len() + ciphertext.len());
         result.extend_from_slice(&encap_key);
@@ -244,7 +244,7 @@ impl XhpkeSender {
     pub fn seal(&mut self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, JsError> {
         self.inner
             .seal(msg_to_seal, msg_to_auth)
-            .map_err(|e| JsError::new(&format!("seal failed: {:?}", e)))
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 }
 
@@ -260,6 +260,6 @@ impl XhpkeReceiver {
     pub fn open(&mut self, msg_to_open: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, JsError> {
         self.inner
             .open(msg_to_open, msg_to_auth)
-            .map_err(|e| JsError::new(&format!("open failed: {:?}", e)))
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 }

@@ -10,14 +10,29 @@
 
 use wasm_bindgen::prelude::*;
 
+/// Maximum output length for SHA-256 HKDF (255 * 32 bytes per RFC 5869). The
+/// underlying implementation panics beyond it, which inside WASM would trap
+/// and poison the instance, so it is checked up front.
+const MAX_OUTPUT_LEN: usize = 255 * 32;
+
 /// Derives a key from the secret, salt, and info using HKDF-SHA256, returning a
 /// byte array that can be used as a cryptographic key.
 ///
-/// Panics if out_len exceeds the maximum output length for SHA-256 HKDF, which is
-/// 255 * 32 = 8160 bytes.
+/// The out_len may not exceed the maximum output length for SHA-256 HKDF, which
+/// is 255 * 32 = 8160 bytes.
 #[wasm_bindgen]
-pub fn hkdf_key(secret: &[u8], salt: &[u8], info: &[u8], out_len: usize) -> Vec<u8> {
-    darkbio_crypto::hkdf::key_with_len(secret, salt, info, out_len)
+pub fn hkdf_key(
+    secret: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    out_len: usize,
+) -> Result<Vec<u8>, JsError> {
+    if out_len > MAX_OUTPUT_LEN {
+        return Err(JsError::new("output length must be at most 8160 bytes"));
+    }
+    Ok(darkbio_crypto::hkdf::key_with_len(
+        secret, salt, info, out_len,
+    ))
 }
 
 /// Generates a pseudorandom key for use with hkdf_expand from an input secret
@@ -39,6 +54,9 @@ pub fn hkdf_extract(secret: &[u8], salt: &[u8]) -> Vec<u8> {
 /// Section 3.3. Most common scenarios will want to use hkdf_key instead.
 #[wasm_bindgen]
 pub fn hkdf_expand(prk: &[u8], info: &[u8], out_len: usize) -> Result<Vec<u8>, JsError> {
+    if out_len > MAX_OUTPUT_LEN {
+        return Err(JsError::new("output length must be at most 8160 bytes"));
+    }
     let prk: [u8; 32] = prk
         .try_into()
         .map_err(|_| JsError::new("prk must be 32 bytes"))?;
