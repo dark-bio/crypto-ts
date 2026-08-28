@@ -67,7 +67,7 @@ pub fn argon2_key(
     if time < 1 {
         return Err(JsError::new("time cost must be at least 1"));
     }
-    if threads < 1 || threads > MAX_THREADS {
+    if !(1..=MAX_THREADS).contains(&threads) {
         return Err(JsError::new("threads must be between 1 and 262144"));
     }
     if out_len < MIN_OUTPUT_LEN {
