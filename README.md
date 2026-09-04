@@ -32,7 +32,7 @@ The library is opinionated. Parameters and primitives were selected to provide m
 
 *¹ Whilst RSA is used in the Dark Bio project for secure boot signatures on pre-quantum hardware, there was no reason to expose that in the TypeScript wrappers. It's available in Rust so anyone needing it can expose it easily themselves.*
 
-*² As CBOR encoding/decoding would require a full reimplementation in TypeScript, that is delegated to any preferred 3rd party library. To ensure correctness, this package provides a `cbor.verify`, which it also implicitly enforces that when crossing through `cose`.*
+*² CBOR encoding and decoding is delegated to [cborg](https://github.com/rvagg/cborg), a full reimplementation in TypeScript being out of scope. To ensure correctness, this package provides a type system. `cbor` codecs declare the shape of a value the way a Rust type deriving `Cbor` does, `cose` and `cwt` functions take values bound to their codec, and the canonical form of every byte crossing the WASM boundary is checked by the Rust validator, which `cbor.verify` also exposes.*
 
 ## Native packages
 

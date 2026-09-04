@@ -5,7 +5,8 @@
 // license that can be found in the LICENSE file.
 
 import { argon2_key } from "./wasm/darkbio_crypto_wasm.js";
-import { ensureInit } from "./init.js";
+import { ensureInit } from "./internal/init.js";
+import { u32 } from "./internal/limits.js";
 
 /**
  * Derive a key from password, salt, and cost parameters using Argon2id.
@@ -31,6 +32,13 @@ export async function key(
 ): Promise<Uint8Array> {
   await ensureInit();
   return new Uint8Array(
-    argon2_key(password, salt, time, memory, threads, outLen),
+    argon2_key(
+      password,
+      salt,
+      u32(time, "time"),
+      u32(memory, "memory"),
+      u32(threads, "threads"),
+      u32(outLen, "outLen"),
+    ),
   );
 }

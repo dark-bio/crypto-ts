@@ -1,3 +1,9 @@
+// crypto-ts: cryptography primitives and wrappers
+// Copyright 2026 Dark Bio AG. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 import { describe, it, expect } from "vitest";
 import { key } from "../src/argon2.js";
 
@@ -78,5 +84,10 @@ describe("argon2", () => {
     await expect(key(password, salt, 1, 4, 1, 32)).rejects.toThrow();
     await expect(key(password, salt, 1, 64, 0, 32)).rejects.toThrow();
     await expect(key(password, salt, 1, 64, 1, 3)).rejects.toThrow();
+    await expect(key(password, salt, 2 ** 32 + 1, 64, 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 2 ** 32 + 64, 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 64, 2 ** 32 + 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 64, 1, 2 ** 32 + 32)).rejects.toThrow();
+    await expect(key(password, salt, 1.5, 64, 1, 32)).rejects.toThrow();
   });
 });

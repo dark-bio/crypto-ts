@@ -1,3 +1,9 @@
+// crypto-ts: cryptography primitives and wrappers
+// Copyright 2026 Dark Bio AG. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 import { describe, it, expect } from "vitest";
 import { key, extract, expand } from "../src/hkdf.js";
 
@@ -89,8 +95,11 @@ describe("hkdf", () => {
 
     expect((await key(secret, salt, info, 8160)).length).toBe(8160);
     await expect(key(secret, salt, info, 8161)).rejects.toThrow();
+    await expect(key(secret, salt, info, 2 ** 32 + 42)).rejects.toThrow();
 
     const prk = await extract(secret, salt);
     await expect(expand(prk, info, 8161)).rejects.toThrow();
+    await expect(expand(prk, info, 2 ** 32 + 42)).rejects.toThrow();
+    await expect(expand(prk, info, 1.5)).rejects.toThrow();
   });
 });
