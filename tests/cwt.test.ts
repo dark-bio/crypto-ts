@@ -101,6 +101,16 @@ describe("cwt", () => {
       await expect(
         verify(Basic.bytes(token), issuerPub, domain, (1n << 64n) + 1500000n),
       ).rejects.toThrow();
+      for (const bogus of [null, false, "0", []]) {
+        await expect(
+          verify(
+            Basic.bytes(token),
+            issuerPub,
+            domain,
+            bogus as unknown as number,
+          ),
+        ).rejects.toThrow();
+      }
     });
 
     it("roundtrips all standard CWT claims", async () => {
@@ -494,6 +504,18 @@ describe("cwt", () => {
       expect(() => oemid.encode("acme" as unknown as Oemid)).toThrow(
         CodecError,
       );
+      for (const bogus of [
+        {},
+        { ieee: "abc" },
+        { random: "0123456789abcdef" },
+        { pen: 1n, ieee: new Uint8Array(3) },
+        Object.create({ pen: 1n }) as object,
+        { oui: new Uint8Array(3) },
+      ]) {
+        expect(() => oemid.encode(bogus as unknown as Oemid)).toThrow(
+          CodecError,
+        );
+      }
       expect(() => oemid.encode({ random: new Uint8Array(15) })).toThrow(
         CodecError,
       );

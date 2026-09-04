@@ -117,19 +117,27 @@ export const oemid: Codec<Oemid> = codec(
     if (typeof value !== "object" || value === null) {
       throw new CodecError("not an OEM identifier");
     }
-    if ("pen" in value) {
-      return uint.encode(value.pen);
+    const forms = Object.keys(value);
+    if (forms.length !== 1) {
+      throw new CodecError("not an OEM identifier of exactly one form");
     }
-    if ("ieee" in value) {
-      if (value.ieee.length !== 3) {
-        throw new CodecError("IEEE OEM identifier is not 3 bytes");
-      }
-      return value.ieee;
+    const data = (value as Record<string, unknown>)[forms[0]];
+    switch (forms[0]) {
+      case "pen":
+        return uint.encode(data as bigint);
+      case "ieee":
+        if (!(data instanceof Uint8Array) || data.length !== 3) {
+          throw new CodecError("IEEE OEM identifier is not 3 bytes");
+        }
+        return data;
+      case "random":
+        if (!(data instanceof Uint8Array) || data.length !== 16) {
+          throw new CodecError("random OEM identifier is not 16 bytes");
+        }
+        return data;
+      default:
+        throw new CodecError("not an OEM identifier");
     }
-    if (value.random.length !== 16) {
-      throw new CodecError("random OEM identifier is not 16 bytes");
-    }
-    return value.random;
   },
   (value) => {
     if (value instanceof Uint8Array) {
@@ -248,7 +256,10 @@ export const claims = {
 /** Converts the clock of a verification for the WASM boundary. */
 function nowToBigInt(now?: number | bigint): bigint | undefined {
   if (now === undefined) return undefined;
-  if (typeof now === "number" && !Number.isFinite(now)) {
+  if (
+    typeof now !== "bigint" &&
+    (typeof now !== "number" || !Number.isFinite(now))
+  ) {
     throw new Error("now must be a non-negative Unix timestamp within 64 bits");
   }
   const secs = typeof now === "bigint" ? now : BigInt(Math.floor(now));

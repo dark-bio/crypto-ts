@@ -179,6 +179,15 @@ describe("cbor", () => {
       expect(() => cbor.field(1.5, cbor.text)).toThrow(CodecError);
     });
 
+    it("ignores changes to the fields after declaration", () => {
+      const fields = { name: cbor.field(1, cbor.text) };
+      const codec = cbor.map(fields);
+      (fields as Record<string, unknown>).extra = cbor.field(2, cbor.text);
+      expect(() =>
+        codec.encode({ name: "a", extra: "b" } as unknown as { name: string }),
+      ).toThrow("unexpected field extra");
+    });
+
     it("names the path of a mismatch", () => {
       const codec = cbor.tuple(
         cbor.text,

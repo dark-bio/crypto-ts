@@ -325,7 +325,10 @@ export function optional<T>(field: Field<T>): OptionalField<T> {
  * not an integer. Only own properties of a value count as its fields.
  */
 export function map<F extends Fields>(fields: F): Codec<Values<F>> {
-  const entries = Object.entries(fields);
+  const entries = Object.entries(fields).map(
+    ([name, field]) => [name, { ...field }] as const,
+  );
+  const declared = new Set(entries.map(([name]) => name));
   const names = new Map<number, string>();
   for (const [name, field] of entries) {
     if (names.has(field.key)) {
@@ -340,7 +343,7 @@ export function map<F extends Fields>(fields: F): Codec<Values<F>> {
       }
       const record = value as Record<string, unknown>;
       for (const name of Object.keys(record)) {
-        if (!Object.hasOwn(fields, name)) {
+        if (!declared.has(name)) {
           throw new CodecError(`unexpected field ${name}`);
         }
       }

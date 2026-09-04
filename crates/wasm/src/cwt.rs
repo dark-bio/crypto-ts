@@ -21,7 +21,8 @@ pub fn cwt_issue(
     domain: &[u8],
 ) -> Result<Vec<u8>, JsError> {
     cbor::verify(claims_cbor).map_err(|e| JsError::new(&format!("invalid claims CBOR: {}", e)))?;
-    cbor::decode_map_entries(claims_cbor)
+    cbor::Decoder::new(claims_cbor)
+        .decode_map_header()
         .map_err(|e| JsError::new(&format!("invalid claims map: {}", e)))?;
 
     cwt::issue(&cbor::Raw(claims_cbor.to_vec()), &signer.inner, domain)
@@ -40,7 +41,8 @@ pub fn cwt_verify(
     let raw: cbor::Raw = cwt::verify(token, &verifier.inner, domain, now)
         .map_err(|e| JsError::new(&e.to_string()))?;
     cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
-    cbor::decode_map_entries(&raw.0)
+    cbor::Decoder::new(&raw.0)
+        .decode_map_header()
         .map_err(|e| JsError::new(&format!("invalid claims map: {}", e)))?;
     Ok(raw.0)
 }
@@ -57,7 +59,8 @@ pub fn cwt_signer(token: &[u8]) -> Result<XdsaFingerprint, JsError> {
 pub fn cwt_peek(token: &[u8]) -> Result<Vec<u8>, JsError> {
     let raw: cbor::Raw = cwt::peek(token).map_err(|e| JsError::new(&e.to_string()))?;
     cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
-    cbor::decode_map_entries(&raw.0)
+    cbor::Decoder::new(&raw.0)
+        .decode_map_header()
         .map_err(|e| JsError::new(&format!("invalid claims map: {}", e)))?;
     Ok(raw.0)
 }
