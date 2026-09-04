@@ -15,7 +15,9 @@ import {
   XhpkeSender as WasmSender,
   XhpkeReceiver as WasmReceiver,
 } from "./wasm/darkbio_crypto_wasm.js";
-import { ensureInit } from "./init.js";
+import { ensureInit, requireInit } from "./init.js";
+import { codec, CodecError, type Codec } from "./cbor.js";
+import { equal, toHex } from "./bytes.js";
 
 /** Size of the secret key seed in bytes (32). */
 export const SECRET_KEY_SIZE = 32;
@@ -70,6 +72,16 @@ export class Fingerprint {
   toBytes(): Uint8Array {
     return new Uint8Array(this._wasm.to_bytes());
   }
+
+  /** Renders a fingerprint as lowercase hex. */
+  toHex(): string {
+    return toHex(this.toBytes());
+  }
+
+  /** Reports whether another fingerprint is the same. */
+  equals(other: Fingerprint): boolean {
+    return equal(this.toBytes(), other.toBytes());
+  }
 }
 
 /**
@@ -105,6 +117,11 @@ export class PublicKey {
   /** Serializes a public key into a PEM string. */
   toPem(): string {
     return this._wasm.to_pem();
+  }
+
+  /** Reports whether another public key is the same. */
+  equals(other: PublicKey): boolean {
+    return equal(this.toBytes(), other.toBytes());
   }
 
   /** Returns a 256-bit unique identifier for this key (SHA256 of raw public key). */
@@ -250,3 +267,48 @@ export class Receiver {
     return new Uint8Array(this.inner.open(msgToOpen, msgToAuth));
   }
 }
+
+/** The COSE algorithm identifier of the key type. */
+export const ALGORITHM_ID = -70001;
+
+/**
+ * Codec of a public key as its bytes. Only the CBOR type is checked here, the
+ * size and the key material are the Rust key's call.
+ */
+export const publicKey: Codec<PublicKey> = codec(
+  (key) => key.toBytes(),
+  (value) => {
+    if (!(value instanceof Uint8Array)) {
+      throw new CodecError("not a public key");
+    }
+    requireInit();
+    try {
+      return new PublicKey(WasmPublicKey.from_bytes(value));
+    } catch (err) {
+      throw new CodecError(
+        `not a public key: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  },
+);
+
+/**
+ * Codec of a fingerprint as its bytes. Only the CBOR type is checked here,
+ * the size is the Rust fingerprint's call.
+ */
+export const fingerprint: Codec<Fingerprint> = codec(
+  (print) => print.toBytes(),
+  (value) => {
+    if (!(value instanceof Uint8Array)) {
+      throw new CodecError("not a fingerprint");
+    }
+    requireInit();
+    try {
+      return new Fingerprint(WasmFingerprint.from_bytes(value));
+    } catch (err) {
+      throw new CodecError(
+        `not a fingerprint: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  },
+);

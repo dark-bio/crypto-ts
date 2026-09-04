@@ -1,4 +1,12 @@
+// crypto-ts: cryptography primitives and wrappers
+// Copyright 2026 Dark Bio AG. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 import { describe, it, expect } from "vitest";
+import * as cbor from "../src/cbor.js";
+import { CodecError } from "../src/cbor.js";
 import {
   SecretKey,
   PublicKey,
@@ -11,6 +19,7 @@ import {
   ENCAP_KEY_SIZE,
   FINGERPRINT_SIZE,
 } from "../src/xhpke.js";
+import { publicKey, fingerprint } from "../src/xhpke.js";
 
 describe("xhpke", () => {
   function toHex(bytes: Uint8Array): string {
@@ -331,6 +340,47 @@ describe("xhpke", () => {
         const pt = await receiver.open(ct, aad);
         expect(new TextDecoder().decode(pt)).toBe(`message-${i}`);
       }
+    });
+  });
+
+  describe("equality and codecs", () => {
+    it("compares and renders fingerprints", async () => {
+      const sk = await SecretKey.generate();
+      const other = await SecretKey.generate();
+      const fp = sk.fingerprint();
+      expect(fp.equals(sk.publicKey().fingerprint())).toBe(true);
+      expect(fp.equals(await Fingerprint.fromBytes(fp.toBytes()))).toBe(true);
+      expect(fp.equals(other.fingerprint())).toBe(false);
+      expect(fp.toHex()).toBe(toHex(fp.toBytes()));
+      expect(fp.toHex().length).toBe(64);
+    });
+
+    it("compares public keys", async () => {
+      const sk = await SecretKey.generate();
+      const other = await SecretKey.generate();
+      expect(
+        sk
+          .publicKey()
+          .equals(await PublicKey.fromBytes(sk.publicKey().toBytes())),
+      ).toBe(true);
+      expect(sk.publicKey().equals(other.publicKey())).toBe(false);
+    });
+
+    it("roundtrips keys and fingerprints through their codecs", async () => {
+      const sk = await SecretKey.generate();
+      const pk = await cbor.decode(
+        publicKey.bytes(await cbor.encode(publicKey.value(sk.publicKey()))),
+      );
+      expect(pk.equals(sk.publicKey())).toBe(true);
+      const fp = await cbor.decode(
+        fingerprint.bytes(
+          await cbor.encode(fingerprint.value(sk.fingerprint())),
+        ),
+      );
+      expect(fp.equals(sk.fingerprint())).toBe(true);
+      expect(() => publicKey.decode(new Uint8Array(3))).toThrow(CodecError);
+      expect(() => publicKey.decode("key")).toThrow(CodecError);
+      expect(() => fingerprint.decode(new Uint8Array(31))).toThrow(CodecError);
     });
   });
 });

@@ -4,30 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import { encode as cborEncode, decode as cborDecodeRaw } from "cborg";
-import {
-  SecretKey as XdsaSecretKey,
-  PublicKey as XdsaPublicKey,
-  Fingerprint as XdsaFingerprint,
-} from "./xdsa.js";
-import {
-  SecretKey as XhpkeSecretKey,
-  PublicKey as XhpkePublicKey,
-  Fingerprint as XhpkeFingerprint,
-} from "./xhpke.js";
-
-function cborDecode<T>(data: Uint8Array): T {
-  return cborDecodeRaw(data, { useMaps: true }) as T;
-}
-
-function driftToBigInt(maxDriftSecs?: number): bigint | undefined {
-  if (maxDriftSecs === undefined) return undefined;
-  if (!Number.isFinite(maxDriftSecs) || maxDriftSecs < 0) {
-    throw new Error("maxDriftSecs must be a non-negative number");
-  }
-  return BigInt(Math.floor(maxDriftSecs));
-}
-
+import { parse, serialize, type Decodable, type Encodable } from "./cbor.js";
 import {
   cose_sign,
   cose_sign_detached,
@@ -42,33 +19,60 @@ import {
   cose_decrypt,
 } from "./wasm/darkbio_crypto_wasm.js";
 import { ensureInit } from "./init.js";
+import {
+  SecretKey as XdsaSecretKey,
+  PublicKey as XdsaPublicKey,
+  Fingerprint as XdsaFingerprint,
+} from "./xdsa.js";
+import {
+  SecretKey as XhpkeSecretKey,
+  PublicKey as XhpkePublicKey,
+  Fingerprint as XhpkeFingerprint,
+} from "./xhpke.js";
+
+/**
+ * Converts the drift bound of a verification for the WASM boundary.
+ */
+function driftToBigInt(maxDriftSecs?: number): bigint | undefined {
+  if (maxDriftSecs === undefined) return undefined;
+  if (!Number.isFinite(maxDriftSecs) || maxDriftSecs < 0) {
+    throw new Error("maxDriftSecs must be a non-negative number");
+  }
+  return BigInt(Math.floor(maxDriftSecs));
+}
 
 /**
  * Create a COSE_Sign1 signature with an embedded payload.
  */
 export async function sign<E, A>(
-  msgToEmbed: E,
-  msgToAuth: A,
+  msgToEmbed: Encodable<E>,
+  msgToAuth: Encodable<A>,
   signer: XdsaSecretKey,
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  const embedBytes = cborEncode(msgToEmbed);
-  const authBytes = cborEncode(msgToAuth);
-  return new Uint8Array(cose_sign(embedBytes, authBytes, signer._wasm, domain));
+  return new Uint8Array(
+    cose_sign(
+      serialize(msgToEmbed),
+      serialize(msgToAuth),
+      signer._wasm,
+      domain,
+    ),
+  );
 }
 
 /**
  * Create a COSE_Sign1 signature without an embedded payload (detached mode).
  */
 export async function signDetached<A>(
-  msgToAuth: A,
+  msgToAuth: Encodable<A>,
   signer: XdsaSecretKey,
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  const authBytes = cborEncode(msgToAuth);
-  return new Uint8Array(cose_sign_detached(authBytes, signer._wasm, domain));
+  return new Uint8Array(
+    cose_sign_detached(serialize(msgToAuth), signer._wasm, domain),
+  );
 }
 
 /**
@@ -78,22 +82,21 @@ export async function signDetached<A>(
  * payload signed from a plain object comes back as a `Map`.
  */
 export async function verify<T, A>(
-  msgToCheck: Uint8Array,
-  msgToAuth: A,
+  msgToCheck: Decodable<T>,
+  msgToAuth: Encodable<A>,
   verifier: XdsaPublicKey,
   domain: Uint8Array,
   maxDriftSecs?: number,
 ): Promise<T> {
   await ensureInit();
-  const authBytes = cborEncode(msgToAuth);
-  const payloadBytes = cose_verify(
-    msgToCheck,
-    authBytes,
+  const payload = cose_verify(
+    msgToCheck.bytes,
+    serialize(msgToAuth),
     verifier._wasm,
     domain,
     driftToBigInt(maxDriftSecs),
   );
-  return cborDecode(new Uint8Array(payloadBytes)) as T;
+  return msgToCheck.codec.decode(parse(new Uint8Array(payload)));
 }
 
 /**
@@ -101,16 +104,15 @@ export async function verify<T, A>(
  */
 export async function verifyDetached<A>(
   msgToCheck: Uint8Array,
-  msgToAuth: A,
+  msgToAuth: Encodable<A>,
   verifier: XdsaPublicKey,
   domain: Uint8Array,
   maxDriftSecs?: number,
 ): Promise<void> {
   await ensureInit();
-  const authBytes = cborEncode(msgToAuth);
   cose_verify_detached(
     msgToCheck,
-    authBytes,
+    serialize(msgToAuth),
     verifier._wasm,
     domain,
     driftToBigInt(maxDriftSecs),
@@ -133,10 +135,11 @@ export async function signer(signature: Uint8Array): Promise<XdsaFingerprint> {
  *
  * CBOR maps in the payload decode as `Map` objects, not plain objects.
  */
-export async function peek<T>(signature: Uint8Array): Promise<T> {
+export async function peek<T>(signature: Decodable<T>): Promise<T> {
   await ensureInit();
-  const payloadBytes = cose_peek(signature);
-  return cborDecode(new Uint8Array(payloadBytes)) as T;
+  return signature.codec.decode(
+    parse(new Uint8Array(cose_peek(signature.bytes))),
+  );
 }
 
 /**
@@ -153,19 +156,17 @@ export async function recipient(
  * Sign a message then encrypt it to a recipient (sign-then-encrypt).
  */
 export async function seal<S, A>(
-  msgToSeal: S,
-  msgToAuth: A,
+  msgToSeal: Encodable<S>,
+  msgToAuth: Encodable<A>,
   signerKey: XdsaSecretKey,
   recipientKey: XhpkePublicKey,
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  const sealBytes = cborEncode(msgToSeal);
-  const authBytes = cborEncode(msgToAuth);
   return new Uint8Array(
     cose_seal(
-      sealBytes,
-      authBytes,
+      serialize(msgToSeal),
+      serialize(msgToAuth),
       signerKey._wasm,
       recipientKey._wasm,
       domain,
@@ -180,24 +181,23 @@ export async function seal<S, A>(
  * payload sealed from a plain object comes back as a `Map`.
  */
 export async function open<T, A>(
-  msgToOpen: Uint8Array,
-  msgToAuth: A,
+  msgToOpen: Decodable<T>,
+  msgToAuth: Encodable<A>,
   recipientKey: XhpkeSecretKey,
   senderKey: XdsaPublicKey,
   domain: Uint8Array,
   maxDriftSecs?: number,
 ): Promise<T> {
   await ensureInit();
-  const authBytes = cborEncode(msgToAuth);
-  const payloadBytes = cose_open(
-    msgToOpen,
-    authBytes,
+  const payload = cose_open(
+    msgToOpen.bytes,
+    serialize(msgToAuth),
     recipientKey._wasm,
     senderKey._wasm,
     domain,
     driftToBigInt(maxDriftSecs),
   );
-  return cborDecode(new Uint8Array(payloadBytes)) as T;
+  return msgToOpen.codec.decode(parse(new Uint8Array(payload)));
 }
 
 /**
@@ -205,14 +205,13 @@ export async function open<T, A>(
  */
 export async function encrypt<A>(
   sign1: Uint8Array,
-  msgToAuth: A,
+  msgToAuth: Encodable<A>,
   recipientKey: XhpkePublicKey,
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  const authBytes = cborEncode(msgToAuth);
   return new Uint8Array(
-    cose_encrypt(sign1, authBytes, recipientKey._wasm, domain),
+    cose_encrypt(sign1, serialize(msgToAuth), recipientKey._wasm, domain),
   );
 }
 
@@ -221,13 +220,12 @@ export async function encrypt<A>(
  */
 export async function decrypt<A>(
   msgToOpen: Uint8Array,
-  msgToAuth: A,
+  msgToAuth: Encodable<A>,
   recipientKey: XhpkeSecretKey,
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  const authBytes = cborEncode(msgToAuth);
   return new Uint8Array(
-    cose_decrypt(msgToOpen, authBytes, recipientKey._wasm, domain),
+    cose_decrypt(msgToOpen, serialize(msgToAuth), recipientKey._wasm, domain),
   );
 }

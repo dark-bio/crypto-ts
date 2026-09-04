@@ -37,6 +37,7 @@ pub fn cwt_verify(
 ) -> Result<Vec<u8>, JsError> {
     let raw: cbor::Raw = cwt::verify(token, &verifier.inner, domain, now)
         .map_err(|e| JsError::new(&e.to_string()))?;
+    cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
     Ok(raw.0)
 }
 
@@ -51,5 +52,6 @@ pub fn cwt_signer(token: &[u8]) -> Result<XdsaFingerprint, JsError> {
 #[wasm_bindgen]
 pub fn cwt_peek(token: &[u8]) -> Result<Vec<u8>, JsError> {
     let raw: cbor::Raw = cwt::peek(token).map_err(|e| JsError::new(&e.to_string()))?;
+    cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
     Ok(raw.0)
 }

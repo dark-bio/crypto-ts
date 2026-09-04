@@ -68,6 +68,7 @@ pub fn cose_verify(
         max_drift_secs,
     )
     .map_err(|e| JsError::new(&e.to_string()))?;
+    cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
     Ok(raw.0)
 }
 
@@ -103,6 +104,7 @@ pub fn cose_signer(signature: &[u8]) -> Result<XdsaFingerprint, JsError> {
 #[wasm_bindgen]
 pub fn cose_peek(signature: &[u8]) -> Result<Vec<u8>, JsError> {
     let raw: cbor::Raw = cose::peek(signature).map_err(|e| JsError::new(&e.to_string()))?;
+    cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
     Ok(raw.0)
 }
 
@@ -156,6 +158,7 @@ pub fn cose_open(
         max_drift_secs,
     )
     .map_err(|e| JsError::new(&e.to_string()))?;
+    cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
     Ok(raw.0)
 }
 

@@ -7,6 +7,7 @@
 import init from "./wasm/darkbio_crypto_wasm.js";
 
 let initPromise: Promise<unknown> | undefined;
+let initComplete = false;
 
 /**
  * Ensures the WASM module is instantiated exactly once. Concurrent callers
@@ -17,10 +18,30 @@ let initPromise: Promise<unknown> | undefined;
  */
 export function ensureInit(): Promise<unknown> {
   if (initPromise === undefined) {
-    initPromise = init().catch((err: unknown) => {
-      initPromise = undefined;
-      throw err;
-    });
+    initPromise = init()
+      .then((module) => {
+        initComplete = true;
+        return module;
+      })
+      .catch((err: unknown) => {
+        initPromise = undefined;
+        throw err;
+      });
   }
   return initPromise;
+}
+
+/**
+ * Fails unless the WASM module is instantiated, for the synchronous paths a
+ * codec takes when it constructs a key. Every async entry point of the
+ * package initialises the module, so a codec run after any of them is fine.
+ *
+ * @internal
+ */
+export function requireInit(): void {
+  if (!initComplete) {
+    throw new Error(
+      "crypto module not initialised, await any entry point first",
+    );
+  }
 }

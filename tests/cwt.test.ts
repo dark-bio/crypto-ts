@@ -1,15 +1,54 @@
+// crypto-ts: cryptography primitives and wrappers
+// Copyright 2026 Dark Bio AG. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 import { describe, it, expect } from "vitest";
+import { decode as cborgDecode, encode as cborgEncode } from "cborg";
+import * as cbor from "../src/cbor.js";
+import { CodecError } from "../src/cbor.js";
 import {
-  Claims,
   DebugState,
   IntendedUse,
+  claims,
+  confirmation,
   issue,
-  verify,
-  signer,
+  oemid,
   peek,
+  signer,
+  verify,
+  version,
 } from "../src/cwt.js";
-import { SecretKey as XdsaSecretKey } from "../src/xdsa.js";
-import { SecretKey as XhpkeSecretKey } from "../src/xhpke.js";
+import * as xdsa from "../src/xdsa.js";
+import * as xhpke from "../src/xhpke.js";
+
+const domain = new TextEncoder().encode("test-domain");
+
+// The claim set of the basic tokens of the suite.
+const Basic = cbor.map({
+  sub: claims.subject,
+  nbf: claims.notBefore,
+  exp: claims.expiration,
+  cnf: claims.confirmXdsa,
+});
+
+// A token valid from 1000000 to 2000000 for the subject, confirming the key.
+async function basicToken(
+  issuer: xdsa.SecretKey,
+  device: xdsa.PublicKey,
+): Promise<Uint8Array> {
+  return issue(
+    Basic.value({
+      sub: "device-abc",
+      nbf: 1000000n,
+      exp: 2000000n,
+      cnf: device,
+    }),
+    issuer,
+    domain,
+  );
+}
 
 describe("cwt", () => {
   function toHex(bytes: Uint8Array): string {
@@ -20,476 +59,590 @@ describe("cwt", () => {
 
   describe("issue/verify", () => {
     it("issues and verifies a basic token", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const deviceKey = await XdsaSecretKey.generate();
-      const devicePub = await deviceKey.publicKey();
-      const domain = new TextEncoder().encode("test-domain");
-
-      const claims = new Claims();
-      claims.subject = "device-abc";
-      claims.notBefore = 1000000;
-      claims.expiration = 2000000;
-      claims.setConfirmXdsa(devicePub);
-
-      const token = await issue(claims, issuerKey, domain);
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
       expect(token.length).toBeGreaterThan(0);
 
-      const verified = await verify(token, issuerPub, domain, 1500000);
-      expect(verified.subject).toBe("device-abc");
-      expect(verified.notBefore).toBe(1000000);
-      expect(verified.expiration).toBe(2000000);
+      const verified = await verify(
+        Basic.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+        1500000,
+      );
+      expect(verified.sub).toBe("device-abc");
+      expect(verified.nbf).toBe(1000000n);
+      expect(verified.exp).toBe(2000000n);
+      expect(verified.cnf.equals(deviceKey.publicKey())).toBe(true);
     });
 
-    it("accepts a fractional now timestamp", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test-domain");
-
-      const claims = new Claims();
-      claims.notBefore = 1000000;
-      claims.expiration = 2000000;
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000.5);
-      expect(verified.notBefore).toBe(1000000);
-
-      await expect(verify(token, issuerPub, domain, -1)).rejects.toThrow();
+    it("accepts a fractional or bigint now and refuses a negative one", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      const issuerPub = issuerKey.publicKey();
+      expect(
+        (await verify(Basic.bytes(token), issuerPub, domain, 1500000.5)).nbf,
+      ).toBe(1000000n);
+      expect(
+        (await verify(Basic.bytes(token), issuerPub, domain, 1500000n)).nbf,
+      ).toBe(1000000n);
+      await expect(
+        verify(Basic.bytes(token), issuerPub, domain, -1),
+      ).rejects.toThrow();
+      await expect(
+        verify(Basic.bytes(token), issuerPub, domain, -1n),
+      ).rejects.toThrow();
     });
 
     it("roundtrips all standard CWT claims", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.issuer = "test-issuer";
-      claims.subject = "test-subject";
-      claims.audience = "test-audience";
-      claims.expiration = 9999999;
-      claims.notBefore = 1000000;
-      claims.issuedAt = 1500000;
-      claims.tokenId = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(verified.issuer).toBe("test-issuer");
-      expect(verified.subject).toBe("test-subject");
-      expect(verified.audience).toBe("test-audience");
-      expect(verified.expiration).toBe(9999999);
-      expect(verified.notBefore).toBe(1000000);
-      expect(verified.issuedAt).toBe(1500000);
-      expect(toHex(verified.tokenId!)).toBe("deadbeef");
+      const Standard = cbor.map({
+        iss: claims.issuer,
+        sub: claims.subject,
+        aud: claims.audience,
+        exp: claims.expiration,
+        nbf: claims.notBefore,
+        iat: claims.issuedAt,
+        cti: claims.tokenId,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const values = {
+        iss: "issuer",
+        sub: "subject",
+        aud: "audience",
+        exp: 2000000n,
+        nbf: 1000000n,
+        iat: 1000000n,
+        cti: new Uint8Array([1, 2, 3, 4]),
+      };
+      const token = await issue(Standard.value(values), issuerKey, domain);
+      const verified = await verify(
+        Standard.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+        1500000,
+      );
+      expect(verified).toEqual(values);
     });
 
     it("skips temporal validation when now is undefined", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "test";
-      claims.notBefore = 1000000;
-
-      const token = await issue(claims, issuerKey, domain);
-      // Should succeed without temporal check even though no exp
-      const verified = await verify(token, issuerPub, domain);
-      expect(verified.subject).toBe("test");
+      const Timeless = cbor.map({ sub: claims.subject, nbf: claims.notBefore });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const token = await issue(
+        Timeless.value({ sub: "test", nbf: 1000000n }),
+        issuerKey,
+        domain,
+      );
+      const verified = await verify(
+        Timeless.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+      );
+      expect(verified.sub).toBe("test");
     });
 
-    it("validates now == nbf passes (boundary)", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "boundary";
-      claims.notBefore = 1000000;
-      claims.expiration = 2000000;
-
-      const token = await issue(claims, issuerKey, domain);
-      // now == nbf should pass
-      const verified = await verify(token, issuerPub, domain, 1000000);
-      expect(verified.subject).toBe("boundary");
-    });
-
-    it("validates now == exp fails (boundary)", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "boundary";
-      claims.notBefore = 1000000;
-      claims.expiration = 2000000;
-
-      const token = await issue(claims, issuerKey, domain);
-      // now == exp should fail
-      await expect(verify(token, issuerPub, domain, 2000000)).rejects.toThrow();
-    });
-
-    it("rejects token before nbf", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "test";
-      claims.notBefore = 1000000;
-
-      const token = await issue(claims, issuerKey, domain);
-      await expect(verify(token, issuerPub, domain, 500000)).rejects.toThrow();
-    });
-
-    it("rejects expired token", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "test";
-      claims.notBefore = 1000000;
-      claims.expiration = 2000000;
-
-      const token = await issue(claims, issuerKey, domain);
-      await expect(verify(token, issuerPub, domain, 3000000)).rejects.toThrow();
+    it("validates the boundaries of the validity", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      const issuerPub = issuerKey.publicKey();
+      // now == nbf passes, now == exp fails
+      expect(
+        (await verify(Basic.bytes(token), issuerPub, domain, 1000000)).sub,
+      ).toBe("device-abc");
+      await expect(
+        verify(Basic.bytes(token), issuerPub, domain, 2000000),
+      ).rejects.toThrow();
+      // Before nbf and after exp fail
+      await expect(
+        verify(Basic.bytes(token), issuerPub, domain, 999999),
+      ).rejects.toThrow();
+      await expect(
+        verify(Basic.bytes(token), issuerPub, domain, 3000000),
+      ).rejects.toThrow();
     });
 
     it("rejects token with wrong verifier", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const wrongKey = await XdsaSecretKey.generate();
-      const wrongPub = await wrongKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "test";
-      claims.notBefore = 1000000;
-
-      const token = await issue(claims, issuerKey, domain);
-      await expect(verify(token, wrongPub, domain, 1500000)).rejects.toThrow();
+      const issuerKey = await xdsa.SecretKey.generate();
+      const otherKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      await expect(
+        verify(Basic.bytes(token), otherKey.publicKey(), domain, 1500000),
+      ).rejects.toThrow();
     });
 
     it("rejects token with wrong domain", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-
-      const claims = new Claims();
-      claims.subject = "test";
-      claims.notBefore = 1000000;
-
-      const token = await issue(
-        claims,
-        issuerKey,
-        new TextEncoder().encode("domain-a"),
-      );
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
       await expect(
-        verify(token, issuerPub, new TextEncoder().encode("domain-b"), 1500000),
+        verify(
+          Basic.bytes(token),
+          issuerKey.publicKey(),
+          new TextEncoder().encode("other"),
+          1500000,
+        ),
       ).rejects.toThrow();
     });
 
     it("passes without expiration when time check is on", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
+      const Permanent = cbor.map({
+        sub: claims.subject,
+        nbf: claims.notBefore,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const token = await issue(
+        Permanent.value({ sub: "forever", nbf: 1000000n }),
+        issuerKey,
+        domain,
+      );
+      const verified = await verify(
+        Permanent.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+        9999999999,
+      );
+      expect(verified.sub).toBe("forever");
+    });
 
-      const claims = new Claims();
-      claims.subject = "no-exp";
-      claims.notBefore = 1000000;
-      // No expiration set
-
-      const token = await issue(claims, issuerKey, domain);
-      // Should pass even far in the future
-      const verified = await verify(token, issuerPub, domain, 99999999);
-      expect(verified.subject).toBe("no-exp");
+    it("requires not before when time check is on", async () => {
+      const Undated = cbor.map({ sub: claims.subject });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const token = await issue(
+        Undated.value({ sub: "undated" }),
+        issuerKey,
+        domain,
+      );
+      await expect(
+        verify(Undated.bytes(token), issuerKey.publicKey(), domain, 1500000),
+      ).rejects.toThrow();
+      expect(
+        (await verify(Undated.bytes(token), issuerKey.publicKey(), domain)).sub,
+      ).toBe("undated");
     });
   });
 
   describe("confirm key binding", () => {
-    it("roundtrips xDSA confirm key", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const deviceKey = await XdsaSecretKey.generate();
-      const devicePub = await deviceKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      claims.setConfirmXdsa(devicePub);
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      const recovered = await verified.getConfirmXdsa();
-      expect(recovered).toBeDefined();
-      expect(toHex(recovered!.toBytes())).toBe(toHex(devicePub.toBytes()));
-
-      // Should not be found as xHPKE
-      expect(await verified.getConfirmXhpke()).toBeUndefined();
+    it("roundtrips an xDSA confirm key", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      const verified = await verify(
+        Basic.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+        1500000,
+      );
+      expect(toHex(verified.cnf.toBytes())).toBe(
+        toHex(deviceKey.publicKey().toBytes()),
+      );
     });
 
-    it("roundtrips xHPKE confirm key", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const encKey = await XhpkeSecretKey.generate();
-      const encPub = await encKey.publicKey();
-      const domain = new TextEncoder().encode("test");
+    it("roundtrips an xHPKE confirm key", async () => {
+      const Crypto = cbor.map({
+        sub: claims.subject,
+        cnf: claims.confirmXhpke,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xhpke.SecretKey.generate();
+      const token = await issue(
+        Crypto.value({ sub: "device", cnf: deviceKey.publicKey() }),
+        issuerKey,
+        domain,
+      );
+      const verified = await verify(
+        Crypto.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+      );
+      expect(verified.cnf.equals(deviceKey.publicKey())).toBe(true);
+    });
 
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      claims.setConfirmXhpke(encPub);
+    it("tells the key types apart", async () => {
+      const Crypto = cbor.map({
+        sub: claims.subject,
+        cnf: claims.confirmXhpke,
+      });
+      const Signer = cbor.map({
+        sub: claims.subject,
+        cnf: claims.confirmXdsa,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xhpke.SecretKey.generate();
+      const token = await issue(
+        Crypto.value({ sub: "device", cnf: deviceKey.publicKey() }),
+        issuerKey,
+        domain,
+      );
+      await expect(
+        verify(Signer.bytes(token), issuerKey.publicKey(), domain),
+      ).rejects.toThrow(CodecError);
+    });
 
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      const recovered = await verified.getConfirmXhpke();
-      expect(recovered).toBeDefined();
-      expect(toHex(recovered!.toBytes())).toBe(toHex(encPub.toBytes()));
-
-      // Should not be found as xDSA
-      expect(await verified.getConfirmXdsa()).toBeUndefined();
+    it("refuses confirmations of the wrong shape", async () => {
+      const key = (await xdsa.SecretKey.generate()).publicKey();
+      const codec = confirmation(xdsa.ALGORITHM_ID, xdsa.publicKey);
+      const coseKey = (entries: [number, unknown][]) =>
+        new Map([[1, new Map(entries)]]);
+      expect(
+        codec
+          .decode(
+            coseKey([
+              [1, -70000],
+              [-2, key.toBytes()],
+            ]),
+          )
+          .equals(key),
+      ).toBe(true);
+      expect(() =>
+        codec.decode(
+          coseKey([
+            [1, -70001],
+            [-2, key.toBytes()],
+          ]),
+        ),
+      ).toThrow(CodecError);
+      expect(() =>
+        codec.decode(
+          coseKey([
+            [1, -70000],
+            [-2, key.toBytes()],
+            [3, 1],
+          ]),
+        ),
+      ).toThrow(CodecError);
+      expect(() =>
+        codec.decode(
+          coseKey([
+            [1, -70000],
+            [-2, key.toBytes().subarray(1)],
+          ]),
+        ),
+      ).toThrow(CodecError);
+      expect(() => codec.decode(new Map([[2, new Map()]]))).toThrow(CodecError);
+      expect(() => codec.decode(key.toBytes())).toThrow(CodecError);
     });
   });
 
   describe("signer/peek", () => {
     it("extracts signer fingerprint", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "test";
-      claims.notBefore = 1000000;
-
-      const token = await issue(claims, issuerKey, domain);
-      const fp = await signer(token);
-
-      expect(fp.toBytes().length).toBe(32);
-
-      // Should match the issuer's fingerprint
-      const issuerFp = await issuerKey.fingerprint();
-      expect(toHex(fp.toBytes())).toBe(toHex(issuerFp.toBytes()));
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      expect((await signer(token)).equals(issuerKey.fingerprint())).toBe(true);
     });
 
     it("peeks at unverified claims", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const domain = new TextEncoder().encode("test");
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      const peeked = await peek(Basic.bytes(token));
+      expect(peeked.sub).toBe("device-abc");
+      expect(peeked.cnf.equals(deviceKey.publicKey())).toBe(true);
+    });
 
-      const claims = new Claims();
-      claims.subject = "peek-test";
-      claims.notBefore = 1000000;
-      claims.expiration = 2000000;
+    it("refuses a non-canonical payload", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      const envelope = cborgDecode(token, { useMaps: true }) as unknown[];
+      envelope[2] = new Uint8Array([0xa2, 0x02, 0x61, 0x61, 0x02, 0x61, 0x62]);
+      await expect(peek(cbor.raw.bytes(cborgEncode(envelope)))).rejects.toThrow(
+        /invalid payload CBOR/,
+      );
+    });
+  });
 
-      const token = await issue(claims, issuerKey, domain);
-      const peeked = await peek(token);
+  describe("claim sets", () => {
+    it("refuses a token with claims beyond the set", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      const Narrower = cbor.map({
+        sub: claims.subject,
+        nbf: claims.notBefore,
+        exp: claims.expiration,
+      });
+      await expect(
+        verify(Narrower.bytes(token), issuerKey.publicKey(), domain),
+      ).rejects.toThrow("unexpected key 8");
+    });
 
-      expect(peeked.subject).toBe("peek-test");
-      expect(peeked.notBefore).toBe(1000000);
-      expect(peeked.expiration).toBe(2000000);
+    it("refuses a token missing a claim of the set", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      const Wider = cbor.map({ ...basicFields(), iss: claims.issuer });
+      await expect(
+        verify(Wider.bytes(token), issuerKey.publicKey(), domain),
+      ).rejects.toThrow("missing key 1");
+      const Lenient = cbor.map({
+        ...basicFields(),
+        iss: cbor.optional(claims.issuer),
+      });
+      const verified = await verify(
+        Lenient.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+      );
+      expect(verified.iss).toBeUndefined();
+      expect(verified.sub).toBe("device-abc");
+    });
+
+    it("carries a 64 bit expiry exactly", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await issue(
+        Basic.value({
+          sub: "placeholder",
+          nbf: 0n,
+          exp: (1n << 64n) - 1n,
+          cnf: deviceKey.publicKey(),
+        }),
+        issuerKey,
+        domain,
+      );
+      const peeked = await peek(Basic.bytes(token));
+      expect(peeked.exp).toBe((1n << 64n) - 1n);
+    });
+
+    it("reads a token of unknown shape as a raw map", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const token = await basicToken(issuerKey, deviceKey.publicKey());
+      const raw = (await peek(cbor.raw.bytes(token))) as Map<number, unknown>;
+      expect([...raw.keys()]).toEqual([2, 4, 5, 8]);
     });
   });
 
   describe("EAT claims", () => {
     it("roundtrips UEID", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      claims.ueid = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(toHex(verified.ueid!)).toBe("01020304");
+      const Device = cbor.map({
+        sub: claims.subject,
+        nbf: claims.notBefore,
+        ueid: claims.eat.ueid,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const token = await issue(
+        Device.value({
+          sub: "device",
+          nbf: 1000000n,
+          ueid: new Uint8Array([1, 2, 3, 4]),
+        }),
+        issuerKey,
+        domain,
+      );
+      const verified = await verify(
+        Device.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+        1500000,
+      );
+      expect(toHex(verified.ueid)).toBe("01020304");
     });
 
-    it("roundtrips OEMID random", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      const oemidBytes = new Uint8Array(16);
-      oemidBytes.fill(0xab);
-      claims.setOemidRandom(oemidBytes);
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      const recovered = verified.oemid as Uint8Array;
-      expect(recovered.length).toBe(16);
-      expect(toHex(recovered)).toBe("ab".repeat(16));
+    it("roundtrips every OEMID form", async () => {
+      const Device = cbor.map({ sub: claims.subject, oem: claims.eat.oemid });
+      const issuerKey = await xdsa.SecretKey.generate();
+      for (const oem of [
+        { pen: 12345n },
+        { ieee: new Uint8Array([1, 2, 3]) },
+        { random: new Uint8Array(16).fill(0xab) },
+      ]) {
+        const token = await issue(
+          Device.value({ sub: "device", oem }),
+          issuerKey,
+          domain,
+        );
+        const verified = await verify(
+          Device.bytes(token),
+          issuerKey.publicKey(),
+          domain,
+        );
+        expect(verified.oem).toEqual(oem);
+      }
     });
 
-    it("roundtrips OEMID PEN", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      claims.setOemidPen(12345);
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(verified.oemid).toBe(12345);
-    });
-
-    it("validates OEMID random length", () => {
-      const claims = new Claims();
-      expect(() => claims.setOemidRandom(new Uint8Array(15))).toThrow();
-      expect(() => claims.setOemidRandom(new Uint8Array(17))).toThrow();
-    });
-
-    it("validates OEMID IEEE length", () => {
-      const claims = new Claims();
-      expect(() => claims.setOemidIeee(new Uint8Array(2))).toThrow();
-      expect(() => claims.setOemidIeee(new Uint8Array(4))).toThrow();
+    it("validates OEMID lengths", () => {
+      expect(() => oemid.encode({ random: new Uint8Array(15) })).toThrow(
+        CodecError,
+      );
+      expect(() => oemid.encode({ random: new Uint8Array(17) })).toThrow(
+        CodecError,
+      );
+      expect(() => oemid.encode({ ieee: new Uint8Array(2) })).toThrow(
+        CodecError,
+      );
+      expect(() => oemid.encode({ ieee: new Uint8Array(4) })).toThrow(
+        CodecError,
+      );
+      expect(() => oemid.decode(new Uint8Array(5))).toThrow(CodecError);
+      expect(() => oemid.decode("x")).toThrow(CodecError);
     });
 
     it("roundtrips hw/sw version", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      claims.hwVersion = "1.2.3";
-      claims.swVersion = "4.5.6";
-      claims.hwModel = new Uint8Array([0x01, 0x02]);
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(verified.hwVersion).toBe("1.2.3");
-      expect(verified.swVersion).toBe("4.5.6");
-      expect(toHex(verified.hwModel!)).toBe("0102");
+      const Device = cbor.map({
+        sub: claims.subject,
+        hwv: claims.eat.hwVersion,
+        swv: claims.eat.swVersion,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const token = await issue(
+        Device.value({ sub: "device", hwv: "2.0", swv: "1.5.3" }),
+        issuerKey,
+        domain,
+      );
+      const verified = await verify(
+        Device.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+      );
+      expect(verified.hwv).toBe("2.0");
+      expect(verified.swv).toBe("1.5.3");
     });
 
-    it("roundtrips debug state", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      claims.debugStatus = DebugState.DisabledPermanently;
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(verified.debugStatus).toBe(DebugState.DisabledPermanently);
+    it("refuses versions with the scheme element", () => {
+      expect(version.decode(["1.0"])).toBe("1.0");
+      expect(() => version.decode(["1.0", "semver"])).toThrow(CodecError);
+      expect(() => version.decode("1.0")).toThrow(CodecError);
     });
 
-    it("roundtrips intended use", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      claims.intendedUse = IntendedUse.CertIssuance;
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(verified.intendedUse).toBe(IntendedUse.CertIssuance);
+    it("roundtrips debug state and intended use", async () => {
+      const Device = cbor.map({
+        sub: claims.subject,
+        debug: claims.eat.debugStatus,
+        use: claims.eat.intendedUse,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const token = await issue(
+        Device.value({
+          sub: "device",
+          debug: DebugState.DisabledPermanently,
+          use: IntendedUse.Provisioning,
+        }),
+        issuerKey,
+        domain,
+      );
+      const verified = await verify(
+        Device.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+      );
+      expect(verified.debug).toBe(DebugState.DisabledPermanently);
+      expect(verified.use).toBe(IntendedUse.Provisioning);
+      expect(() => claims.eat.debugStatus.codec.decode(9)).toThrow(CodecError);
+      expect(() => claims.eat.intendedUse.codec.decode(0)).toThrow(CodecError);
     });
 
     it("roundtrips boot claims", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "device";
-      claims.notBefore = 1000000;
-      claims.uptime = 3600;
-      claims.oemBoot = true;
-      claims.bootCount = 42;
-      claims.bootSeed = new Uint8Array([0xca, 0xfe]);
-      claims.swName = "firmware-v2";
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(verified.uptime).toBe(3600);
-      expect(verified.oemBoot).toBe(true);
-      expect(verified.bootCount).toBe(42);
-      expect(toHex(verified.bootSeed!)).toBe("cafe");
-      expect(verified.swName).toBe("firmware-v2");
+      const Device = cbor.map({
+        sub: claims.subject,
+        uptime: claims.eat.uptime,
+        oemBoot: claims.eat.oemBoot,
+        bootCount: claims.eat.bootCount,
+        bootSeed: claims.eat.bootSeed,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const values = {
+        sub: "device",
+        uptime: 3600n,
+        oemBoot: true,
+        bootCount: 42n,
+        bootSeed: new Uint8Array([9, 8, 7, 6]),
+      };
+      const token = await issue(Device.value(values), issuerKey, domain);
+      const verified = await verify(
+        Device.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+      );
+      expect(verified).toEqual(values);
     });
 
     it("roundtrips a full EAT token", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const deviceKey = await XdsaSecretKey.generate();
-      const devicePub = await deviceKey.publicKey();
-      const domain = new TextEncoder().encode("device-attestation");
-
-      const claims = new Claims();
-      claims.issuer = "manufacturer";
-      claims.subject = "device-001";
-      claims.notBefore = 1000000;
-      claims.expiration = 9000000;
-      claims.setConfirmXdsa(devicePub);
-      claims.ueid = new TextEncoder().encode("SN-999");
-      claims.hwVersion = "2.0";
-      claims.swVersion = "1.5.3";
-      claims.swName = "secure-fw";
-      claims.debugStatus = DebugState.DisabledFullyPermanently;
-      claims.oemBoot = true;
-      claims.intendedUse = IntendedUse.Registration;
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(verified.issuer).toBe("manufacturer");
-      expect(verified.subject).toBe("device-001");
-      expect(verified.notBefore).toBe(1000000);
-      expect(verified.expiration).toBe(9000000);
-      expect(await verified.getConfirmXdsa()).toBeDefined();
-      expect(toHex((await verified.getConfirmXdsa())!.toBytes())).toBe(
-        toHex(devicePub.toBytes()),
+      const Full = cbor.map({
+        iss: claims.issuer,
+        sub: claims.subject,
+        nbf: claims.notBefore,
+        exp: claims.expiration,
+        cnf: claims.confirmXdsa,
+        ueid: claims.eat.ueid,
+        hwv: claims.eat.hwVersion,
+        swv: claims.eat.swVersion,
+        swn: claims.eat.swName,
+        debug: claims.eat.debugStatus,
+        oemBoot: claims.eat.oemBoot,
+        use: claims.eat.intendedUse,
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const deviceKey = await xdsa.SecretKey.generate();
+      const values = {
+        iss: "manufacturer",
+        sub: "device-001",
+        nbf: 1000000n,
+        exp: 9000000n,
+        cnf: deviceKey.publicKey(),
+        ueid: new TextEncoder().encode("SN-999"),
+        hwv: "2.0",
+        swv: "1.5.3",
+        swn: "secure-fw",
+        debug: DebugState.DisabledFullyPermanently,
+        oemBoot: true,
+        use: IntendedUse.Registration,
+      };
+      const token = await issue(
+        Full.value(values),
+        issuerKey,
+        new TextEncoder().encode("device-attestation"),
       );
-      expect(new TextDecoder().decode(verified.ueid!)).toBe("SN-999");
-      expect(verified.hwVersion).toBe("2.0");
-      expect(verified.swVersion).toBe("1.5.3");
-      expect(verified.swName).toBe("secure-fw");
-      expect(verified.debugStatus).toBe(DebugState.DisabledFullyPermanently);
-      expect(verified.oemBoot).toBe(true);
-      expect(verified.intendedUse).toBe(IntendedUse.Registration);
+      const verified = await verify(
+        Full.bytes(token),
+        issuerKey.publicKey(),
+        new TextEncoder().encode("device-attestation"),
+        1500000,
+      );
+      expect(verified.cnf.equals(deviceKey.publicKey())).toBe(true);
+      expect({ ...verified, cnf: undefined }).toEqual({
+        ...values,
+        cnf: undefined,
+      });
     });
   });
 
   describe("custom claims", () => {
-    it("roundtrips custom integer-keyed claims", async () => {
-      const issuerKey = await XdsaSecretKey.generate();
-      const issuerPub = await issuerKey.publicKey();
-      const domain = new TextEncoder().encode("test");
-
-      const claims = new Claims();
-      claims.subject = "test";
-      claims.notBefore = 1000000;
-      claims.set(1000, "custom-value");
-      claims.set(1001, 42);
-
-      const token = await issue(claims, issuerKey, domain);
-      const verified = await verify(token, issuerPub, domain, 1500000);
-
-      expect(verified.get(1000)).toBe("custom-value");
-      expect(verified.get(1001)).toBe(42);
+    it("roundtrips custom integer keyed claims", async () => {
+      const Custom = cbor.map({
+        sub: claims.subject,
+        nbf: claims.notBefore,
+        label: cbor.field(1000, cbor.text),
+        answer: cbor.field(1001, cbor.uint),
+      });
+      const issuerKey = await xdsa.SecretKey.generate();
+      const values = {
+        sub: "test",
+        nbf: 1000000n,
+        label: "custom-value",
+        answer: 42n,
+      };
+      const token = await issue(Custom.value(values), issuerKey, domain);
+      const verified = await verify(
+        Custom.bytes(token),
+        issuerKey.publicKey(),
+        domain,
+        1500000,
+      );
+      expect(verified).toEqual(values);
     });
   });
 });
+
+// The fields of the basic claim set, for the sets that extend it.
+function basicFields() {
+  return {
+    sub: claims.subject,
+    nbf: claims.notBefore,
+    exp: claims.expiration,
+    cnf: claims.confirmXdsa,
+  };
+}
