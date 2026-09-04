@@ -95,8 +95,11 @@ describe("hkdf", () => {
 
     expect((await key(secret, salt, info, 8160)).length).toBe(8160);
     await expect(key(secret, salt, info, 8161)).rejects.toThrow();
+    await expect(key(secret, salt, info, 2 ** 32 + 42)).rejects.toThrow();
 
     const prk = await extract(secret, salt);
     await expect(expand(prk, info, 8161)).rejects.toThrow();
+    await expect(expand(prk, info, 2 ** 32 + 42)).rejects.toThrow();
+    await expect(expand(prk, info, 1.5)).rejects.toThrow();
   });
 });

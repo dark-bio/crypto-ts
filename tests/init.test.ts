@@ -5,11 +5,19 @@
 // license that can be found in the LICENSE file.
 
 import { describe, it, expect } from "vitest";
-import { SecretKey as XdsaSecretKey } from "../src/xdsa.js";
+import { SecretKey as XdsaSecretKey, publicKey } from "../src/xdsa.js";
 import { SecretKey as XhpkeSecretKey } from "../src/xhpke.js";
 import { generate } from "../src/rand.js";
 
 describe("init", () => {
+  // Codecs run synchronously and construct keys through WASM, so before any
+  // entry point has initialised the module they must fail clearly.
+  it("refuses synchronous key decoding before initialization", () => {
+    expect(() => publicKey.decode(new Uint8Array(32))).toThrow(
+      "not initialised",
+    );
+  });
+
   // The first WASM calls race across modules on purpose: concurrent callers
   // must share a single module instantiation, and handles created by either
   // must stay usable afterwards.

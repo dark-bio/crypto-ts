@@ -230,7 +230,12 @@ export const ALGORITHM_ID = -70000;
  * size and the key material are the Rust key's call.
  */
 export const publicKey: Codec<PublicKey> = codec(
-  (key) => key.toBytes(),
+  (key) => {
+    if (!(key instanceof PublicKey)) {
+      throw new CodecError("not a public key");
+    }
+    return key.toBytes();
+  },
   (value) => {
     if (!(value instanceof Uint8Array)) {
       throw new CodecError("not a public key");
@@ -251,7 +256,12 @@ export const publicKey: Codec<PublicKey> = codec(
  * the size is the Rust fingerprint's call.
  */
 export const fingerprint: Codec<Fingerprint> = codec(
-  (print) => print.toBytes(),
+  (print) => {
+    if (!(print instanceof Fingerprint)) {
+      throw new CodecError("not a fingerprint");
+    }
+    return print.toBytes();
+  },
   (value) => {
     if (!(value instanceof Uint8Array)) {
       throw new CodecError("not a fingerprint");

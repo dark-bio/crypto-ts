@@ -19,6 +19,7 @@ import {
   cose_decrypt,
 } from "./wasm/darkbio_crypto_wasm.js";
 import { ensureInit } from "./init.js";
+import { U64_MAX } from "./limits.js";
 import {
   SecretKey as XdsaSecretKey,
   PublicKey as XdsaPublicKey,
@@ -35,10 +36,18 @@ import {
  */
 function driftToBigInt(maxDriftSecs?: number): bigint | undefined {
   if (maxDriftSecs === undefined) return undefined;
-  if (!Number.isFinite(maxDriftSecs) || maxDriftSecs < 0) {
-    throw new Error("maxDriftSecs must be a non-negative number");
+  if (!Number.isFinite(maxDriftSecs)) {
+    throw new Error(
+      "maxDriftSecs must be a non-negative number within 64 bits",
+    );
   }
-  return BigInt(Math.floor(maxDriftSecs));
+  const secs = BigInt(Math.floor(maxDriftSecs));
+  if (secs < 0n || secs > U64_MAX) {
+    throw new Error(
+      "maxDriftSecs must be a non-negative number within 64 bits",
+    );
+  }
+  return secs;
 }
 
 /**
@@ -77,9 +86,6 @@ export async function signDetached<A>(
 
 /**
  * Verify a COSE_Sign1 signature and return the embedded payload.
- *
- * CBOR maps in the payload decode as `Map` objects, not plain objects, so a
- * payload signed from a plain object comes back as a `Map`.
  */
 export async function verify<T, A>(
   msgToCheck: Decodable<T>,
@@ -132,8 +138,6 @@ export async function signer(signature: Uint8Array): Promise<XdsaFingerprint> {
  *
  * Warning: The returned payload is unauthenticated and should not be
  * trusted until verified with `verify`.
- *
- * CBOR maps in the payload decode as `Map` objects, not plain objects.
  */
 export async function peek<T>(signature: Decodable<T>): Promise<T> {
   await ensureInit();
@@ -176,9 +180,6 @@ export async function seal<S, A>(
 
 /**
  * Decrypt and verify a sealed message.
- *
- * CBOR maps in the payload decode as `Map` objects, not plain objects, so a
- * payload sealed from a plain object comes back as a `Map`.
  */
 export async function open<T, A>(
   msgToOpen: Decodable<T>,

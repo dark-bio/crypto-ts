@@ -168,6 +168,12 @@ describe("cbor", () => {
         codec.encode({ count: 3n } as unknown as { name: string }),
       ).toThrow("missing field name");
       expect(() =>
+        codec.encode({ name: "a", admin: true } as unknown as { name: string }),
+      ).toThrow("unexpected field admin");
+      expect(() =>
+        codec.encode(Object.create({ name: "a" }) as { name: string }),
+      ).toThrow("missing field name");
+      expect(() =>
         cbor.map({ a: cbor.field(1, cbor.text), b: cbor.field(1, cbor.text) }),
       ).toThrow("declared twice");
       expect(() => cbor.field(1.5, cbor.text)).toThrow(CodecError);
@@ -207,10 +213,6 @@ describe("cbor", () => {
       await expect(cbor.decode(cbor.raw.bytes(duplicate))).rejects.toThrow();
       const misordered = new Uint8Array([0xa2, 0x02, 0x02, 0x01, 0x01]);
       await expect(cbor.decode(cbor.raw.bytes(misordered))).rejects.toThrow();
-    });
-
-    it("has the encoded null", () => {
-      expect(toHex(cbor.NULL)).toBe("f6");
     });
   });
 });

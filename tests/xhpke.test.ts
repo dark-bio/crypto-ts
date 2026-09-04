@@ -381,6 +381,14 @@ describe("xhpke", () => {
       expect(() => publicKey.decode(new Uint8Array(3))).toThrow(CodecError);
       expect(() => publicKey.decode("key")).toThrow(CodecError);
       expect(() => fingerprint.decode(new Uint8Array(31))).toThrow(CodecError);
+      expect(() =>
+        publicKey.encode({
+          toBytes: () => new Uint8Array(3),
+        } as unknown as PublicKey),
+      ).toThrow(CodecError);
+      expect(() =>
+        fingerprint.encode(sk.publicKey() as unknown as Fingerprint),
+      ).toThrow(CodecError);
     });
   });
 });

@@ -84,5 +84,10 @@ describe("argon2", () => {
     await expect(key(password, salt, 1, 4, 1, 32)).rejects.toThrow();
     await expect(key(password, salt, 1, 64, 0, 32)).rejects.toThrow();
     await expect(key(password, salt, 1, 64, 1, 3)).rejects.toThrow();
+    await expect(key(password, salt, 2 ** 32 + 1, 64, 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 2 ** 32 + 64, 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 64, 2 ** 32 + 1, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 64, 1, 2 ** 32 + 32)).rejects.toThrow();
+    await expect(key(password, salt, 1.5, 64, 1, 32)).rejects.toThrow();
   });
 });

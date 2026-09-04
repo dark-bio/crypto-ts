@@ -111,6 +111,44 @@ describe("cose", () => {
       ).rejects.toThrow();
     });
 
+    it("bounds the signature drift", async () => {
+      const sk = await XdsaSecretKey.generate();
+      const domain = new TextEncoder().encode("test");
+      const signed = await sign(
+        cbor.text.value("payload"),
+        Nothing.value(null),
+        sk,
+        domain,
+      );
+      expect(
+        await verify(
+          cbor.text.bytes(signed),
+          Nothing.value(null),
+          sk.publicKey(),
+          domain,
+          60,
+        ),
+      ).toBe("payload");
+      await expect(
+        verify(
+          cbor.text.bytes(signed),
+          Nothing.value(null),
+          sk.publicKey(),
+          domain,
+          -1,
+        ),
+      ).rejects.toThrow();
+      await expect(
+        verify(
+          cbor.text.bytes(signed),
+          Nothing.value(null),
+          sk.publicKey(),
+          domain,
+          2 ** 64,
+        ),
+      ).rejects.toThrow();
+    });
+
     it("fails verification with a payload of another shape", async () => {
       const sk = await XdsaSecretKey.generate();
       const domain = new TextEncoder().encode("test");

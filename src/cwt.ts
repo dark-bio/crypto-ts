@@ -67,6 +67,7 @@ import {
   cwt_peek,
 } from "./wasm/darkbio_crypto_wasm.js";
 import { ensureInit } from "./init.js";
+import { U64_MAX } from "./limits.js";
 import * as xdsa from "./xdsa.js";
 import * as xhpke from "./xhpke.js";
 
@@ -113,6 +114,9 @@ export type Oemid =
 /** Codec of an OEM identifier, an unsigned integer or 3 or 16 bytes. */
 export const oemid: Codec<Oemid> = codec(
   (value) => {
+    if (typeof value !== "object" || value === null) {
+      throw new CodecError("not an OEM identifier");
+    }
     if ("pen" in value) {
       return uint.encode(value.pen);
     }
@@ -244,14 +248,14 @@ export const claims = {
 /** Converts the clock of a verification for the WASM boundary. */
 function nowToBigInt(now?: number | bigint): bigint | undefined {
   if (now === undefined) return undefined;
-  if (typeof now === "bigint") {
-    if (now < 0n) throw new Error("now must be a non-negative Unix timestamp");
-    return now;
+  if (typeof now === "number" && !Number.isFinite(now)) {
+    throw new Error("now must be a non-negative Unix timestamp within 64 bits");
   }
-  if (!Number.isFinite(now) || now < 0) {
-    throw new Error("now must be a non-negative Unix timestamp");
+  const secs = typeof now === "bigint" ? now : BigInt(Math.floor(now));
+  if (secs < 0n || secs > U64_MAX) {
+    throw new Error("now must be a non-negative Unix timestamp within 64 bits");
   }
-  return BigInt(Math.floor(now));
+  return secs;
 }
 
 /**

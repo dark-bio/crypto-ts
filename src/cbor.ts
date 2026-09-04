@@ -25,6 +25,7 @@
 import { encode as cborgEncode, decode as cborgDecode } from "cborg";
 import { cbor_verify } from "./wasm/darkbio_crypto_wasm.js";
 import { ensureInit } from "./init.js";
+import { U64_MAX } from "./limits.js";
 
 /** A value bound to the codec that encodes it. */
 export interface Encodable<T> {
@@ -149,11 +150,8 @@ function primitive<T>(
   return codec(guard, guard);
 }
 
-const U64_MAX = (1n << 64n) - 1n;
 const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
-const SAFE_MAX = BigInt(Number.MAX_SAFE_INTEGER);
-const SAFE_MIN = BigInt(Number.MIN_SAFE_INTEGER);
 
 /** Reads an integer cborg produced, a number within the safe range or a bigint beyond it. */
 function integer(value: unknown, reason: string): bigint {
@@ -164,11 +162,6 @@ function integer(value: unknown, reason: string): bigint {
     return value;
   }
   throw new CodecError(reason);
-}
-
-/** Renders an integer for cborg, a number within the safe range so the two encode alike. */
-function render(value: bigint): number | bigint {
-  return value >= SAFE_MIN && value <= SAFE_MAX ? Number(value) : value;
 }
 
 /** A boolean. */
@@ -207,7 +200,7 @@ export const uint: Codec<bigint> = codec(
     if (typeof value !== "bigint" || value < 0n || value > U64_MAX) {
       throw new CodecError("not an unsigned 64 bit integer");
     }
-    return render(value);
+    return value;
   },
   (value) => {
     const parsed = integer(value, "not an unsigned 64 bit integer");
@@ -224,7 +217,7 @@ export const int: Codec<bigint> = codec(
     if (typeof value !== "bigint" || value < I64_MIN || value > I64_MAX) {
       throw new CodecError("not a signed 64 bit integer");
     }
-    return render(value);
+    return value;
   },
   (value) => {
     const parsed = integer(value, "not a signed 64 bit integer");
@@ -258,12 +251,7 @@ export function enumeration<E extends number>(values: readonly E[]): Codec<E> {
     }
     return value as E;
   };
-  return codec(guard, (value) => {
-    if (typeof value === "bigint") {
-      throw new CodecError("not a member of the enumeration");
-    }
-    return guard(value);
-  });
+  return codec(guard, guard);
 }
 
 /** An array of any length of one kind of item, the counterpart of `Array<T>`. */
@@ -332,8 +320,9 @@ export function optional<T>(field: Field<T>): OptionalField<T> {
 
 /**
  * An integer keyed map with exactly the declared fields, the counterpart of
- * a struct with `#[cbor(key = N)]` fields. A key the map does not declare, a
- * required key missing and a key that is not an integer are all refused.
+ * a struct with `#[cbor(key = N)]` fields. Both ways, a field the map does
+ * not declare and a required field missing are refused, as is a key that is
+ * not an integer. Only own properties of a value count as its fields.
  */
 export function map<F extends Fields>(fields: F): Codec<Values<F>> {
   const entries = Object.entries(fields);
@@ -349,10 +338,15 @@ export function map<F extends Fields>(fields: F): Codec<Values<F>> {
       if (typeof value !== "object" || value === null || Array.isArray(value)) {
         throw new CodecError("not an object");
       }
-      const encoded = new Map<number, unknown>();
       const record = value as Record<string, unknown>;
+      for (const name of Object.keys(record)) {
+        if (!Object.hasOwn(fields, name)) {
+          throw new CodecError(`unexpected field ${name}`);
+        }
+      }
+      const encoded = new Map<number, unknown>();
       for (const [name, field] of entries) {
-        const item = record[name];
+        const item = Object.hasOwn(record, name) ? record[name] : undefined;
         if (item === undefined) {
           if (field.required) {
             throw new CodecError(`missing field ${name}`);
@@ -394,9 +388,6 @@ export function map<F extends Fields>(fields: F): Codec<Values<F>> {
     },
   );
 }
-
-/** The encoded null, the authenticated data of a CWT. */
-export const NULL: Uint8Array = cborgEncode(null);
 
 /**
  * Encodes a value bound to its codec into canonical CBOR, the bytes checked

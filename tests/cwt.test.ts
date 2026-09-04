@@ -19,7 +19,9 @@ import {
   signer,
   verify,
   version,
+  type Oemid,
 } from "../src/cwt.js";
+import * as cose from "../src/cose.js";
 import * as xdsa from "../src/xdsa.js";
 import * as xhpke from "../src/xhpke.js";
 
@@ -76,7 +78,7 @@ describe("cwt", () => {
       expect(verified.cnf.equals(deviceKey.publicKey())).toBe(true);
     });
 
-    it("accepts a fractional or bigint now and refuses a negative one", async () => {
+    it("accepts a fractional or bigint now and refuses one outside 64 bits", async () => {
       const issuerKey = await xdsa.SecretKey.generate();
       const deviceKey = await xdsa.SecretKey.generate();
       const token = await basicToken(issuerKey, deviceKey.publicKey());
@@ -92,6 +94,12 @@ describe("cwt", () => {
       ).rejects.toThrow();
       await expect(
         verify(Basic.bytes(token), issuerPub, domain, -1n),
+      ).rejects.toThrow();
+      await expect(
+        verify(Basic.bytes(token), issuerPub, domain, 2 ** 64 + 1500000),
+      ).rejects.toThrow();
+      await expect(
+        verify(Basic.bytes(token), issuerPub, domain, (1n << 64n) + 1500000n),
       ).rejects.toThrow();
     });
 
@@ -407,6 +415,24 @@ describe("cwt", () => {
       expect(peeked.exp).toBe((1n << 64n) - 1n);
     });
 
+    it("refuses a claim set that is not a map", async () => {
+      const issuerKey = await xdsa.SecretKey.generate();
+      await expect(
+        issue(cbor.text.value("not a claims map"), issuerKey, domain),
+      ).rejects.toThrow(/claims map/);
+      // A COSE Sign1 over anything but a map is not a token either
+      const signed = await cose.sign(
+        cbor.text.value("not a claims map"),
+        cbor.nil.value(null),
+        issuerKey,
+        domain,
+      );
+      await expect(peek(cbor.raw.bytes(signed))).rejects.toThrow(/claims map/);
+      await expect(
+        verify(cbor.raw.bytes(signed), issuerKey.publicKey(), domain),
+      ).rejects.toThrow(/claims map/);
+    });
+
     it("reads a token of unknown shape as a raw map", async () => {
       const issuerKey = await xdsa.SecretKey.generate();
       const deviceKey = await xdsa.SecretKey.generate();
@@ -465,6 +491,9 @@ describe("cwt", () => {
     });
 
     it("validates OEMID lengths", () => {
+      expect(() => oemid.encode("acme" as unknown as Oemid)).toThrow(
+        CodecError,
+      );
       expect(() => oemid.encode({ random: new Uint8Array(15) })).toThrow(
         CodecError,
       );
