@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import init from "./wasm/darkbio_crypto_wasm.js";
+import init from "../wasm/darkbio_crypto_wasm.js";
 
 let initPromise: Promise<unknown> | undefined;
 let initComplete = false;

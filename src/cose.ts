@@ -4,7 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import { parse, serialize, type Decodable, type Encodable } from "./cbor.js";
+import type { Decodable, Encodable } from "./cbor.js";
+import { parse, serialize } from "./internal/cborg.js";
 import {
   cose_sign,
   cose_sign_detached,
@@ -18,8 +19,8 @@ import {
   cose_encrypt,
   cose_decrypt,
 } from "./wasm/darkbio_crypto_wasm.js";
-import { ensureInit } from "./init.js";
-import { U64_MAX } from "./limits.js";
+import { ensureInit } from "./internal/init.js";
+import { U64_MAX } from "./internal/limits.js";
 import {
   SecretKey as XdsaSecretKey,
   PublicKey as XdsaPublicKey,

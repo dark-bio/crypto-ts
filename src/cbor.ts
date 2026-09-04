@@ -22,10 +22,10 @@
  * @module
  */
 
-import { encode as cborgEncode, decode as cborgDecode } from "cborg";
 import { cbor_verify } from "./wasm/darkbio_crypto_wasm.js";
-import { ensureInit } from "./init.js";
-import { U64_MAX } from "./limits.js";
+import { parse, serialize } from "./internal/cborg.js";
+import { ensureInit } from "./internal/init.js";
+import { U64_MAX } from "./internal/limits.js";
 
 /** A value bound to the codec that encodes it. */
 export interface Encodable<T> {
@@ -367,7 +367,7 @@ export function map<F extends Fields>(fields: F): Codec<Values<F>> {
       if (!(value instanceof Map)) {
         throw new CodecError("not a map");
       }
-      const decoded: Record<string, unknown> = {};
+      const decoded: [string, unknown][] = [];
       for (const key of (value as Map<unknown, unknown>).keys()) {
         if (typeof key !== "number" || !Number.isSafeInteger(key)) {
           throw new CodecError("map key is not an integer");
@@ -383,11 +383,14 @@ export function map<F extends Fields>(fields: F): Codec<Values<F>> {
           }
           continue;
         }
-        decoded[name] = within(`.${name}`, () =>
-          field.codec.decode((value as Map<unknown, unknown>).get(field.key)),
-        );
+        decoded.push([
+          name,
+          within(`.${name}`, () =>
+            field.codec.decode((value as Map<unknown, unknown>).get(field.key)),
+          ),
+        ]);
       }
-      return decoded as Values<F>;
+      return Object.fromEntries(decoded) as Values<F>;
     },
   );
 }
@@ -400,7 +403,7 @@ export function map<F extends Fields>(fields: F): Codec<Values<F>> {
  * @throws CodecError on a value of the wrong shape
  */
 export async function encode<T>(item: Encodable<T>): Promise<Uint8Array> {
-  const data = cborgEncode(item.codec.encode(item.value));
+  const data = serialize(item);
   await ensureInit();
   cbor_verify(data);
   return data;
@@ -417,29 +420,6 @@ export async function decode<T>(item: Decodable<T>): Promise<T> {
   await ensureInit();
   cbor_verify(item.bytes);
   return item.codec.decode(parse(item.bytes));
-}
-
-/**
- * Decodes bytes the Rust validator already checked into what cborg makes of
- * them, maps as `Map`.
- *
- * @internal
- */
-export function parse(data: Uint8Array): unknown {
-  return cborgDecode(data, {
-    useMaps: true,
-    rejectDuplicateMapKeys: true,
-  }) as unknown;
-}
-
-/**
- * Serializes a value bound to its codec into the bytes the WASM boundary
- * takes, canonical by cborg's ordering and verified again on the Rust side.
- *
- * @internal
- */
-export function serialize<T>(item: Encodable<T>): Uint8Array {
-  return cborgEncode(item.codec.encode(item.value));
 }
 
 /**

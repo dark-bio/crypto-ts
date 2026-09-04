@@ -179,6 +179,14 @@ describe("cbor", () => {
       expect(() => cbor.field(1.5, cbor.text)).toThrow(CodecError);
     });
 
+    it("keeps every field an own property of the result", async () => {
+      const codec = cbor.map({ ["__proto__"]: cbor.field(1, cbor.text) });
+      const result = await roundtrip(codec, { ["__proto__"]: "a" });
+      expect(Object.hasOwn(result, "__proto__")).toBe(true);
+      expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+      expect(Object.entries(result)).toEqual([["__proto__", "a"]]);
+    });
+
     it("ignores changes to the fields after declaration", () => {
       const fields = { name: cbor.field(1, cbor.text) };
       const codec = cbor.map(fields);

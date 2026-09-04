@@ -5,8 +5,8 @@
 // license that can be found in the LICENSE file.
 
 import { argon2_key } from "./wasm/darkbio_crypto_wasm.js";
-import { ensureInit } from "./init.js";
-import { u32 } from "./limits.js";
+import { ensureInit } from "./internal/init.js";
+import { u32 } from "./internal/limits.js";
 
 /**
  * Derive a key from password, salt, and cost parameters using Argon2id.

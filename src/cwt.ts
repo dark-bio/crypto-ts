@@ -52,22 +52,21 @@ import {
   enumeration,
   field,
   map,
-  parse,
-  serialize,
   text,
   uint,
   type Codec,
   type Decodable,
   type Encodable,
 } from "./cbor.js";
+import { parse, serialize } from "./internal/cborg.js";
 import {
   cwt_issue,
   cwt_verify,
   cwt_signer,
   cwt_peek,
 } from "./wasm/darkbio_crypto_wasm.js";
-import { ensureInit } from "./init.js";
-import { U64_MAX } from "./limits.js";
+import { ensureInit } from "./internal/init.js";
+import { U64_MAX } from "./internal/limits.js";
 import * as xdsa from "./xdsa.js";
 import * as xhpke from "./xhpke.js";
 

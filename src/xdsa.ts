@@ -14,9 +14,9 @@ import {
   XdsaSignature as WasmSignature,
   XdsaFingerprint as WasmFingerprint,
 } from "./wasm/darkbio_crypto_wasm.js";
-import { ensureInit, requireInit } from "./init.js";
+import { ensureInit, requireInit } from "./internal/init.js";
 import { codec, CodecError, type Codec } from "./cbor.js";
-import { equal, toHex } from "./bytes.js";
+import { equal, toHex } from "./internal/bytes.js";
 
 /** Size of the secret key in bytes (64). */
 export const SECRET_KEY_SIZE = 64;
