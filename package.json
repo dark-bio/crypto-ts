@@ -1,6 +1,6 @@
 {
   "name": "@darkbio/crypto",
-  "version": "0.17.1",
+  "version": "0.17.2",
   "author": "Péter Szilágyi <peter@dark.bio>",
   "description": "Cryptography primitives and wrappers",
   "repository": {
@@ -22,22 +22,23 @@
   ],
   "scripts": {
     "build:wasm": "wasm-pack build crates/wasm --target web --out-dir ../../src/wasm",
-    "build:ts": "tsc && vite build",
+    "build:ts": "node node_modules/typescript/bin/tsc && vite build",
     "build": "npm run build:wasm && npm run build:ts",
     "test": "vitest",
-    "test:browser": "vitest --browser.enabled --browser.name=chromium --browser.provider=playwright",
-    "check": "tsc --noEmit"
+    "test:browser": "vitest --browser.enabled --browser.name=chromium",
+    "check": "node node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
-    "cborg": "^4.2.0"
+    "cborg": "^6.1.2"
   },
   "devDependencies": {
-    "@vitest/browser": "^3.0.0",
-    "playwright": "^1.50.0",
-    "typescript": "^5.7.0",
-    "vite": "^6.0.0",
-    "vite-plugin-dts": "^4.5.4",
-    "vitest": "^3.0.0"
+    "@typescript/typescript6": "^6.0.2",
+    "@vitest/browser-playwright": "^5.0.0",
+    "playwright": "^1.62.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-dts": "^5.1.0",
+    "vitest": "^5.0.0"
   },
   "keywords": [
     "cryptography",
