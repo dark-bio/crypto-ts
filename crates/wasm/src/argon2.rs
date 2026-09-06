@@ -73,7 +73,6 @@ pub fn argon2_key(
     if out_len < MIN_OUTPUT_LEN {
         return Err(JsError::new("output length must be at least 4 bytes"));
     }
-    Ok(darkbio_crypto::argon2::key_with_len(
-        password, salt, time, memory, threads, out_len,
-    ))
+    let key = darkbio_crypto::argon2::key_with_len(password, salt, time, memory, threads, out_len);
+    Ok(key.to_vec())
 }

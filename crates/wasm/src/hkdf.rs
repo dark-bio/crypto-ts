@@ -30,9 +30,7 @@ pub fn hkdf_key(
     if out_len > MAX_OUTPUT_LEN {
         return Err(JsError::new("output length must be at most 8160 bytes"));
     }
-    Ok(darkbio_crypto::hkdf::key_with_len(
-        secret, salt, info, out_len,
-    ))
+    Ok(darkbio_crypto::hkdf::key_with_len(secret, salt, info, out_len).to_vec())
 }
 
 /// Generates a pseudorandom key for use with hkdf_expand from an input secret
@@ -60,5 +58,5 @@ pub fn hkdf_expand(prk: &[u8], info: &[u8], out_len: usize) -> Result<Vec<u8>, J
     let prk: [u8; 32] = prk
         .try_into()
         .map_err(|_| JsError::new("prk must be 32 bytes"))?;
-    Ok(darkbio_crypto::hkdf::expand_with_len(prk, info, out_len))
+    Ok(darkbio_crypto::hkdf::expand_with_len(&prk, info, out_len).to_vec())
 }
