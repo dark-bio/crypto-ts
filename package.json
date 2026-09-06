@@ -26,6 +26,7 @@
     "build": "npm run build:wasm && npm run build:ts",
     "test": "vitest",
     "test:browser": "vitest --browser.enabled --browser.name=chromium",
+    "test:types": "node node_modules/typescript/bin/tsc -p tests/types",
     "check": "node node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
