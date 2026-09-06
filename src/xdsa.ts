@@ -56,9 +56,13 @@ export class Fingerprint {
   /** @internal */
   readonly _wasm: WasmFingerprint;
 
-  /** @internal */
-  constructor(inner: WasmFingerprint) {
+  private constructor(inner: WasmFingerprint) {
     this._wasm = inner;
+  }
+
+  /** @internal */
+  static _fromWasm(inner: WasmFingerprint): Fingerprint {
+    return new Fingerprint(inner);
   }
 
   /** Creates a fingerprint from a 32-byte array. */
@@ -91,9 +95,13 @@ export class Signature {
   /** @internal */
   readonly _wasm: WasmSignature;
 
-  /** @internal */
-  constructor(inner: WasmSignature) {
+  private constructor(inner: WasmSignature) {
     this._wasm = inner;
+  }
+
+  /** @internal */
+  static _fromWasm(inner: WasmSignature): Signature {
+    return new Signature(inner);
   }
 
   /** Creates a signature from a 3373-byte array. */
@@ -117,9 +125,13 @@ export class PublicKey {
   /** @internal */
   readonly _wasm: WasmPublicKey;
 
-  /** @internal */
-  constructor(inner: WasmPublicKey) {
+  private constructor(inner: WasmPublicKey) {
     this._wasm = inner;
+  }
+
+  /** @internal */
+  static _fromWasm(inner: WasmPublicKey): PublicKey {
+    return new PublicKey(inner);
   }
 
   /** Creates a public key from a 1984-byte array. */
@@ -151,7 +163,7 @@ export class PublicKey {
 
   /** Returns a 256-bit unique identifier for this key. */
   fingerprint(): Fingerprint {
-    return new Fingerprint(this._wasm.fingerprint());
+    return Fingerprint._fromWasm(this._wasm.fingerprint());
   }
 
   /**
@@ -173,8 +185,7 @@ export class SecretKey {
   /** @internal */
   readonly _wasm: WasmSecretKey;
 
-  /** @internal */
-  constructor(inner: WasmSecretKey) {
+  private constructor(inner: WasmSecretKey) {
     this._wasm = inner;
   }
 
@@ -208,17 +219,17 @@ export class SecretKey {
 
   /** Retrieves the public counterpart of the secret key. */
   publicKey(): PublicKey {
-    return new PublicKey(this._wasm.public_key());
+    return PublicKey._fromWasm(this._wasm.public_key());
   }
 
   /** Returns a 256-bit unique identifier for this key. */
   fingerprint(): Fingerprint {
-    return new Fingerprint(this._wasm.fingerprint());
+    return Fingerprint._fromWasm(this._wasm.fingerprint());
   }
 
   /** Creates a digital signature of the message. */
   sign(message: Uint8Array): Signature {
-    return new Signature(this._wasm.sign(message));
+    return Signature._fromWasm(this._wasm.sign(message));
   }
 }
 
@@ -242,7 +253,7 @@ export const publicKey: Codec<PublicKey> = codec(
     }
     requireInit();
     try {
-      return new PublicKey(WasmPublicKey.from_bytes(value));
+      return PublicKey._fromWasm(WasmPublicKey.from_bytes(value));
     } catch (err) {
       throw new CodecError(
         `not a public key: ${err instanceof Error ? err.message : String(err)}`,
@@ -268,7 +279,7 @@ export const fingerprint: Codec<Fingerprint> = codec(
     }
     requireInit();
     try {
-      return new Fingerprint(WasmFingerprint.from_bytes(value));
+      return Fingerprint._fromWasm(WasmFingerprint.from_bytes(value));
     } catch (err) {
       throw new CodecError(
         `not a fingerprint: ${err instanceof Error ? err.message : String(err)}`,

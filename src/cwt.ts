@@ -328,7 +328,7 @@ export async function verify<C>(
  */
 export async function signer(token: Uint8Array): Promise<xdsa.Fingerprint> {
   await ensureInit();
-  return new xdsa.Fingerprint(cwt_signer(token));
+  return xdsa.Fingerprint._fromWasm(cwt_signer(token));
 }
 
 /**

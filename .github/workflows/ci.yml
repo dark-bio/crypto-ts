@@ -30,6 +30,9 @@ jobs:
       - name: Build TypeScript
         run: npm run build:ts
 
+      - name: Check public declarations
+        run: npm run test:types
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 

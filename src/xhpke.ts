@@ -57,9 +57,13 @@ export class Fingerprint {
   /** @internal */
   readonly _wasm: WasmFingerprint;
 
-  /** @internal */
-  constructor(inner: WasmFingerprint) {
+  private constructor(inner: WasmFingerprint) {
     this._wasm = inner;
+  }
+
+  /** @internal */
+  static _fromWasm(inner: WasmFingerprint): Fingerprint {
+    return new Fingerprint(inner);
   }
 
   /** Creates a fingerprint from a 32-byte array. */
@@ -92,9 +96,13 @@ export class PublicKey {
   /** @internal */
   readonly _wasm: WasmPublicKey;
 
-  /** @internal */
-  constructor(inner: WasmPublicKey) {
+  private constructor(inner: WasmPublicKey) {
     this._wasm = inner;
+  }
+
+  /** @internal */
+  static _fromWasm(inner: WasmPublicKey): PublicKey {
+    return new PublicKey(inner);
   }
 
   /** Creates a public key from a 1216-byte array. */
@@ -126,7 +134,7 @@ export class PublicKey {
 
   /** Returns a 256-bit unique identifier for this key (SHA256 of raw public key). */
   fingerprint(): Fingerprint {
-    return new Fingerprint(this._wasm.fingerprint());
+    return Fingerprint._fromWasm(this._wasm.fingerprint());
   }
 
   /**
@@ -137,7 +145,7 @@ export class PublicKey {
   newSender(domain: Uint8Array): { sender: Sender; encapKey: Uint8Array } {
     const wasmSender = this._wasm.new_sender(domain);
     const encapKey = new Uint8Array(wasmSender.encap_key());
-    return { sender: new Sender(wasmSender), encapKey };
+    return { sender: Sender._fromWasm(wasmSender), encapKey };
   }
 
   /**
@@ -165,8 +173,7 @@ export class SecretKey {
   /** @internal */
   readonly _wasm: WasmSecretKey;
 
-  /** @internal */
-  constructor(inner: WasmSecretKey) {
+  private constructor(inner: WasmSecretKey) {
     this._wasm = inner;
   }
 
@@ -200,19 +207,19 @@ export class SecretKey {
 
   /** Retrieves the public counterpart of the secret key. */
   publicKey(): PublicKey {
-    return new PublicKey(this._wasm.public_key());
+    return PublicKey._fromWasm(this._wasm.public_key());
   }
 
   /** Returns a 256-bit unique identifier for this key (SHA256 of raw public key). */
   fingerprint(): Fingerprint {
-    return new Fingerprint(this._wasm.fingerprint());
+    return Fingerprint._fromWasm(this._wasm.fingerprint());
   }
 
   /**
    * Creates an HPKE receiver context for multi-message decryption.
    */
   newReceiver(encapKey: Uint8Array, domain: Uint8Array): Receiver {
-    return new Receiver(this._wasm.new_receiver(encapKey, domain));
+    return Receiver._fromWasm(this._wasm.new_receiver(encapKey, domain));
   }
 
   /**
@@ -239,9 +246,13 @@ export class SecretKey {
 export class Sender {
   private readonly inner: WasmSender;
 
-  /** @internal */
-  constructor(inner: WasmSender) {
+  private constructor(inner: WasmSender) {
     this.inner = inner;
+  }
+
+  /** @internal */
+  static _fromWasm(inner: WasmSender): Sender {
+    return new Sender(inner);
   }
 
   /** Encrypts a message using the next nonce in the sequence. */
@@ -257,9 +268,13 @@ export class Sender {
 export class Receiver {
   private readonly inner: WasmReceiver;
 
-  /** @internal */
-  constructor(inner: WasmReceiver) {
+  private constructor(inner: WasmReceiver) {
     this.inner = inner;
+  }
+
+  /** @internal */
+  static _fromWasm(inner: WasmReceiver): Receiver {
+    return new Receiver(inner);
   }
 
   /** Decrypts a message using the next nonce in the sequence. */
@@ -288,7 +303,7 @@ export const publicKey: Codec<PublicKey> = codec(
     }
     requireInit();
     try {
-      return new PublicKey(WasmPublicKey.from_bytes(value));
+      return PublicKey._fromWasm(WasmPublicKey.from_bytes(value));
     } catch (err) {
       throw new CodecError(
         `not a public key: ${err instanceof Error ? err.message : String(err)}`,
@@ -314,7 +329,7 @@ export const fingerprint: Codec<Fingerprint> = codec(
     }
     requireInit();
     try {
-      return new Fingerprint(WasmFingerprint.from_bytes(value));
+      return Fingerprint._fromWasm(WasmFingerprint.from_bytes(value));
     } catch (err) {
       throw new CodecError(
         `not a fingerprint: ${err instanceof Error ? err.message : String(err)}`,

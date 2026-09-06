@@ -131,7 +131,7 @@ export async function verifyDetached<A>(
  */
 export async function signer(signature: Uint8Array): Promise<XdsaFingerprint> {
   await ensureInit();
-  return new XdsaFingerprint(cose_signer(signature));
+  return XdsaFingerprint._fromWasm(cose_signer(signature));
 }
 
 /**
@@ -154,7 +154,7 @@ export async function recipient(
   ciphertext: Uint8Array,
 ): Promise<XhpkeFingerprint> {
   await ensureInit();
-  return new XhpkeFingerprint(cose_recipient(ciphertext));
+  return XhpkeFingerprint._fromWasm(cose_recipient(ciphertext));
 }
 
 /**
