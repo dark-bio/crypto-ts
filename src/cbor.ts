@@ -5,18 +5,33 @@
 // license that can be found in the LICENSE file.
 
 /**
- * Typed codecs over the restricted CBOR type system used across the darkbio
- * ecosystem, the counterpart of a Rust type deriving `Cbor`. cborg stays the
- * byte codec; the canonical form of every byte crossing the WASM boundary is
- * checked by the Rust validator.
+ * Typed codecs over the restricted CBOR type system used across Dark Bio.
+ *
+ * https://datatracker.ietf.org/doc/html/rfc8949
+ *
+ * Only a minimal subset of CBOR is supported: booleans, null, 64-bit
+ * integers, text strings, byte strings, arrays and maps with integer keys. The
+ * encoding is deterministic (RFC 8949 Section 4.2.1). Integers take their
+ * shortest form, map keys are sorted by their encoded bytes, and there are no
+ * indefinite lengths, floats or tags.
+ *
+ * A codec declares the shape of a value the way a Rust type deriving `Cbor`
+ * does. Values are bound to their codec before they are encoded, and bytes
+ * before they are decoded. The `cose` and `cwt` functions take them the same
+ * way. {@link encode} and {@link decode} reject any encoding that breaks the
+ * rules above. The cborg library handles the bytes, so a codec converts to and
+ * from what cborg takes, such as a `Map` for a map.
  *
  * @example
  * ```ts
- * import { cbor, xdsa } from "@darkbio/crypto";
+ * import { cbor } from "@darkbio/crypto";
  *
- * const Hello = cbor.tuple(xdsa.publicKey, cbor.bytes);
- * const bytes = await cbor.encode(Hello.value([key, nonce]));
- * const [gotKey, gotNonce] = await cbor.decode(Hello.bytes(bytes));
+ * const Triple = cbor.tuple(cbor.uint, cbor.text, cbor.bytes);
+ * const bytes = await cbor.encode(Triple.value([1n, "two", new Uint8Array([3])]));
+ * // bytes holds 83 01 63 74 77 6f 41 03 in hex
+ *
+ * const [a, b, c] = await cbor.decode(Triple.bytes(bytes));
+ * console.log(a, b, c); // 1n two Uint8Array(1) [ 3 ]
  * ```
  *
  * @module
@@ -29,13 +44,17 @@ import { U64_MAX } from "./internal/limits.js";
 
 /** A value bound to the codec that encodes it. */
 export interface Encodable<T> {
+  /** The codec that encodes the value. */
   readonly codec: Codec<T>;
+  /** The value to encode. */
   readonly value: T;
 }
 
 /** Bytes bound to the codec that decodes them. */
 export interface Decodable<T> {
+  /** The codec that decodes the bytes. */
   readonly codec: Codec<T>;
+  /** The CBOR bytes to decode. */
   readonly bytes: Uint8Array;
 }
 
@@ -57,15 +76,21 @@ export interface Codec<T> {
 
 /** A required field of a map, a codec at an integer key. */
 export interface Field<T> {
+  /** The integer key of the field in the map. */
   readonly key: number;
+  /** The codec of the field's value. */
   readonly codec: Codec<T>;
+  /** Marks the field as required. */
   readonly required: true;
 }
 
 /** An optional field of a map, absent from the map when undefined. */
 export interface OptionalField<T> {
+  /** The integer key of the field in the map. */
   readonly key: number;
+  /** The codec of the field's value. */
   readonly codec: Codec<T>;
+  /** Marks the field as optional. */
   readonly required: false;
 }
 
@@ -85,7 +110,7 @@ export type Values<F extends Fields> = {
   ]?: F[K] extends OptionalField<infer T> ? T : never;
 };
 
-/** The value types of a tuple codec's items. */
+/** The item codecs of a tuple codec, one per position of the value types. */
 export type Codecs<T extends unknown[]> = { [I in keyof T]: Codec<T[I]> };
 
 /**
@@ -94,9 +119,17 @@ export type Codecs<T extends unknown[]> = { [I in keyof T]: Codec<T[I]> };
  * the top.
  */
 export class CodecError extends Error {
+  /** What is wrong with the value. */
   readonly reason: string;
+  /** Where in the value the mismatch is, empty at the top. */
   readonly path: string;
 
+  /**
+   * Creates an error for a value of the wrong shape.
+   *
+   * @param reason - What is wrong with the value
+   * @param path - Where in the value the mismatch is, empty at the top
+   */
   constructor(reason: string, path = "") {
     super(path === "" ? reason : `${reason} at ${path}`);
     this.name = "CodecError";
@@ -118,10 +151,26 @@ function within<T>(segment: string, run: () => T): T {
 }
 
 /**
- * Builds a codec from its two directions, the bindings coming for free.
+ * Builds a codec from its two directions, adding the value and bytes bindings.
+ * Both directions should throw a {@link CodecError} on a value of the wrong
+ * shape.
+ *
+ * @example
+ * ```ts
+ * import { cbor } from "@darkbio/crypto";
+ *
+ * // A date carried as whole seconds since the Unix epoch
+ * const date = cbor.codec<Date>(
+ *   (value) => cbor.uint.encode(BigInt(Math.floor(value.getTime() / 1000))),
+ *   (value) => new Date(Number(cbor.uint.decode(value)) * 1000),
+ * );
+ * const bytes = await cbor.encode(date.value(new Date("2026-01-01T00:00:00Z")));
+ * console.log(await cbor.decode(date.bytes(bytes))); // 2026-01-01T00:00:00.000Z
+ * ```
  *
  * @param encode - Converts a value into what cborg encodes
  * @param decode - Converts what cborg decoded into a value
+ * @returns The codec
  */
 export function codec<T>(
   encode: (value: T) => unknown,
@@ -170,7 +219,7 @@ export const bool: Codec<boolean> = primitive(
   "not a boolean",
 );
 
-/** Null, the value of `Option<T>::None` and of a CWT's authenticated data. */
+/** Null, the counterpart of Rust's `cbor::Null` and of a `None` option. */
 export const nil: Codec<null> = primitive(
   (value): value is null => value === null,
   "not null",
@@ -188,13 +237,17 @@ export const bytes: Codec<Uint8Array> = primitive(
   "not bytes",
 );
 
-/** Anything, passed through as cborg decoded it, the counterpart of `cbor::Raw`. */
+/**
+ * Anything, passed through as cborg decoded it, the counterpart of
+ * `cbor::Raw`. The value is not checked against any shape, but {@link encode}
+ * and {@link decode} still check its encoding.
+ */
 export const raw: Codec<unknown> = codec(
   (value) => value,
   (value) => value,
 );
 
-/** An unsigned 64 bit integer. */
+/** An unsigned 64-bit integer, a bigint in both directions. */
 export const uint: Codec<bigint> = codec(
   (value) => {
     if (typeof value !== "bigint" || value < 0n || value > U64_MAX) {
@@ -211,7 +264,7 @@ export const uint: Codec<bigint> = codec(
   },
 );
 
-/** A signed 64 bit integer. */
+/** A signed 64-bit integer, a bigint in both directions. */
 export const int: Codec<bigint> = codec(
   (value) => {
     if (typeof value !== "bigint" || value < I64_MIN || value > I64_MAX) {
@@ -231,6 +284,9 @@ export const int: Codec<bigint> = codec(
 /**
  * A value or null, the counterpart of `Option<T>` in an array or as a
  * nullable map field.
+ *
+ * @param item - The codec of the value when it is not null
+ * @returns The codec
  */
 export function nullable<T>(item: Codec<T>): Codec<T | null> {
   return codec(
@@ -242,6 +298,9 @@ export function nullable<T>(item: Codec<T>): Codec<T | null> {
 /**
  * A member of a set of small integers, the counterpart of a Rust enum encoded
  * as its discriminant.
+ *
+ * @param values - The integers the value may take
+ * @returns The codec
  */
 export function enumeration<E extends number>(values: readonly E[]): Codec<E> {
   const members = new Set<number>(values);
@@ -254,7 +313,12 @@ export function enumeration<E extends number>(values: readonly E[]): Codec<E> {
   return codec(guard, guard);
 }
 
-/** An array of any length of one kind of item, the counterpart of `Array<T>`. */
+/**
+ * An array of any length of one kind of item, the counterpart of `Array<T>`.
+ *
+ * @param item - The codec of every item
+ * @returns The codec
+ */
 export function array<T>(item: Codec<T>): Codec<T[]> {
   return codec(
     (value) => {
@@ -279,6 +343,9 @@ export function array<T>(item: Codec<T>): Codec<T[]> {
 /**
  * An array of a fixed length with an item codec per position, the counterpart
  * of a tuple or a struct with `#[cbor(array)]`.
+ *
+ * @param items - The codec of each item, in order
+ * @returns The codec
  */
 export function tuple<T extends unknown[]>(...items: Codecs<T>): Codec<T> {
   const codecs: Codec<unknown>[] = items;
@@ -302,7 +369,14 @@ export function tuple<T extends unknown[]>(...items: Codecs<T>): Codec<T> {
   );
 }
 
-/** Declares a required map field. */
+/**
+ * Declares a required map field.
+ *
+ * @param key - The integer key of the field in the map
+ * @param codec - The codec of the field's value
+ * @returns The field
+ * @throws CodecError if the key is not a safe integer
+ */
 export function field<T>(key: number, codec: Codec<T>): Field<T> {
   if (!Number.isSafeInteger(key)) {
     throw new CodecError("map key is not an integer");
@@ -312,17 +386,40 @@ export function field<T>(key: number, codec: Codec<T>): Field<T> {
 
 /**
  * Declares a map field that may be absent, the counterpart of an
- * `Option<T>` field, absent when undefined.
+ * `Option<T>` field. The field is left out of the map when its value is
+ * undefined.
+ *
+ * @param field - The field to make optional
+ * @returns The optional field
  */
 export function optional<T>(field: Field<T>): OptionalField<T> {
   return { key: field.key, codec: field.codec, required: false };
 }
 
 /**
- * An integer keyed map with exactly the declared fields, the counterpart of
+ * An integer-keyed map with exactly the declared fields, the counterpart of
  * a struct with `#[cbor(key = N)]` fields. Both ways, a field the map does
  * not declare and a required field missing are refused, as is a key that is
  * not an integer. Only own properties of a value count as its fields.
+ *
+ * @example
+ * ```ts
+ * import { cbor } from "@darkbio/crypto";
+ *
+ * const Bar = cbor.map({
+ *   x: cbor.field(1, cbor.uint), // required
+ *   y: cbor.optional(cbor.field(2, cbor.bytes)), // omitted when undefined
+ *   z: cbor.field(3, cbor.nullable(cbor.uint)), // always present, a value or null
+ * });
+ * const bytes = await cbor.encode(Bar.value({ x: 7n, z: null }));
+ * // bytes holds a2 01 07 03 f6 in hex
+ *
+ * console.log(await cbor.decode(Bar.bytes(bytes))); // { x: 7n, z: null }
+ * ```
+ *
+ * @param fields - The fields of the map, by name
+ * @returns The codec
+ * @throws CodecError if two fields share a key
  */
 export function map<F extends Fields>(fields: F): Codec<Values<F>> {
   const entries = Object.entries(fields).map(
@@ -396,11 +493,13 @@ export function map<F extends Fields>(fields: F): Codec<Values<F>> {
 }
 
 /**
- * Encodes a value bound to its codec into canonical CBOR, the bytes checked
- * by the Rust validator before they are returned.
+ * Encodes a value bound to its codec into deterministic CBOR.
  *
  * @param item - The value and the codec to encode it with
+ * @returns The CBOR bytes
  * @throws CodecError on a value of the wrong shape
+ * @throws If the encoding falls outside the restricted type system, such as a
+ *   float in a raw value
  */
 export async function encode<T>(item: Encodable<T>): Promise<Uint8Array> {
   const data = serialize(item);
@@ -410,10 +509,12 @@ export async function encode<T>(item: Encodable<T>): Promise<Uint8Array> {
 }
 
 /**
- * Decodes canonical CBOR bound to its codec, the bytes checked by the Rust
- * validator before anything is decoded.
+ * Decodes deterministic CBOR bound to its codec. The bytes must pass
+ * {@link verify} before anything is decoded.
  *
  * @param item - The bytes and the codec to decode them with
+ * @returns The decoded value
+ * @throws If the bytes are not valid restricted CBOR
  * @throws CodecError on bytes of the wrong shape
  */
 export async function decode<T>(item: Decodable<T>): Promise<T> {
@@ -423,13 +524,13 @@ export async function decode<T>(item: Decodable<T>): Promise<T> {
 }
 
 /**
- * Verify that data is valid CBOR under the restricted deterministic type
- * system used across the darkbio ecosystem (booleans, null, 64-bit integers,
- * text strings, byte strings, arrays, and integer-keyed maps).
+ * Verifies that data is exactly one complete CBOR item under the restricted
+ * type system.
  *
- * The COSE and CWT functions run this check internally on every payload they
- * sign, embed or hand back; use it directly to pre-check hand-rolled
- * encodings.
+ * It checks UTF-8 text, deterministic integer and length encodings, integer
+ * map keys in order without duplicates, and the nesting limit. It does not
+ * check application-specific schemas or values. The `cose` and `cwt`
+ * functions apply the same check to every payload they sign, embed or return.
  *
  * @param data - The CBOR bytes to validate
  * @throws If the data is not valid restricted CBOR

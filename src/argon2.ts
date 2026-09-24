@@ -4,23 +4,66 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/**
+ * Argon2id key derivation.
+ *
+ * https://datatracker.ietf.org/doc/html/rfc9106
+ *
+ * Turns a password and a salt into key material, made deliberately slow and
+ * memory hungry so guessing passwords is expensive. For stretching a secret
+ * that is already random, see the `hkdf` module instead.
+ *
+ * @module
+ */
+
 import { argon2_key } from "./wasm/darkbio_crypto_wasm.js";
 import { ensureInit } from "./internal/init.js";
 import { u32 } from "./internal/limits.js";
 
 /**
- * Derive a key from password, salt, and cost parameters using Argon2id.
+ * Derives a key from the password, salt and cost parameters using Argon2id.
  *
- * RFC 9106 Section 7.4 recommends time=1, memory=2048*1024 (2GB) as sensible
- * defaults. If that much memory isn't available, increase time to compensate.
+ * RFC 9106 Section 4 recommends `time = 1`, `memory = 2 * 1024 * 1024`
+ * (2 GiB) and `threads = 4`. Its second recommendation uses `time = 3`,
+ * `memory = 64 * 1024` (64 MiB) and `threads = 4`. Both use a random 16-byte
+ * salt and a 32-byte output.
+ *
+ * `time` is the number of passes and `memory` is the total working memory in
+ * KiB. `threads` is Argon2's lane count, an algorithm parameter that changes
+ * the derived key. It does not select how many threads compute the key. Store
+ * the salt and all cost parameters so the same key can be reproduced on other
+ * devices.
+ *
+ * The parameters must stay within these limits:
+ *
+ * - `time` must be at least 1.
+ * - `threads` must be at least 1.
+ * - `memory` must be at least `8 * threads` KiB and at most 2 GiB (2097152 KiB).
+ * - `salt` must be at least 8 bytes.
+ * - `outLen` must be at least 4 bytes.
+ *
+ * @example
+ * ```ts
+ * import { argon2 } from "@darkbio/crypto";
+ *
+ * // Example salt only; generate and store a fresh random 16-byte salt in real code
+ * const salt = new TextEncoder().encode("example salt1234");
+ * const password = new TextEncoder().encode("password");
+ *
+ * // RFC 9106's recommended profile for memory-constrained environments
+ * const key = await argon2.key(password, salt, 3, 64 * 1024, 4, 32);
+ * console.log(key.length); // 32
+ * ```
  *
  * @param password - The password to derive from
- * @param salt - A random salt (min 8 bytes, at least 16 recommended)
- * @param time - Number of passes over memory (iterations)
- * @param memory - Memory size in KiB
- * @param threads - Degree of parallelism
- * @param outLen - Desired output length in bytes
+ * @param salt - A random salt, at least 8 bytes and 16 bytes recommended
+ * @param time - Number of passes over the memory
+ * @param memory - Size of the working memory in KiB
+ * @param threads - Argon2's lane count
+ * @param outLen - Length of the key in bytes
  * @returns The derived key
+ * @throws If a parameter is outside the limits above, or the working memory
+ *   cannot be allocated
  */
 export async function key(
   password: Uint8Array,
