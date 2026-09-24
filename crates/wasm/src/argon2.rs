@@ -70,6 +70,11 @@ pub fn argon2_key(
     if !(1..=MAX_THREADS).contains(&threads) {
         return Err(JsError::new("threads must be between 1 and 262144"));
     }
+    if memory < MIN_MEMORY_KIB * threads {
+        return Err(JsError::new(
+            "memory cost must be at least 8 KiB per thread",
+        ));
+    }
     if out_len < MIN_OUTPUT_LEN {
         return Err(JsError::new("output length must be at least 4 bytes"));
     }

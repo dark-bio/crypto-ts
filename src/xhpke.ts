@@ -4,6 +4,62 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/**
+ * X-Wing HPKE encryption.
+ *
+ * https://datatracker.ietf.org/doc/html/rfc9180
+ * https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem
+ *
+ * Messages are encrypted to a public key with X-Wing, a hybrid of ML-KEM-768
+ * and X25519, and sealed with ChaCha20-Poly1305. Encryption and decryption use
+ * an application domain, prefixed with `dark-bio-v1:`, which both sides must
+ * agree on. The ciphertext also authenticates a second message that must be
+ * supplied separately.
+ *
+ * A {@link Sender} and {@link Receiver} pair shares one encapsulated key across
+ * many messages, which must be opened in the order they were sealed. The
+ * domain is fixed when the contexts are created.
+ *
+ * @example
+ * ```ts
+ * import { xhpke } from "@darkbio/crypto";
+ *
+ * const secret = await xhpke.SecretKey.generate();
+ * const text = new TextEncoder();
+ * const domain = text.encode("example");
+ *
+ * const sealed = secret.publicKey().seal(text.encode("secret"), text.encode("header"), domain);
+ * const plaintext = secret.open(sealed, text.encode("header"), domain);
+ * console.log(new TextDecoder().decode(plaintext)); // secret
+ *
+ * // A tampered header fails authentication
+ * try {
+ *   secret.open(sealed, text.encode("other"), domain);
+ * } catch {
+ *   console.log("rejected");
+ * }
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { xhpke } from "@darkbio/crypto";
+ *
+ * const secret = await xhpke.SecretKey.generate();
+ * const domain = new TextEncoder().encode("example");
+ *
+ * const { sender, encapKey } = secret.publicKey().newSender(domain);
+ * const receiver = secret.newReceiver(encapKey, domain);
+ *
+ * for (const message of ["first", "second"]) {
+ *   const ciphertext = sender.seal(new TextEncoder().encode(message), new Uint8Array());
+ *   const plaintext = receiver.open(ciphertext, new Uint8Array());
+ *   console.log(new TextDecoder().decode(plaintext)); // first, then second
+ * }
+ * ```
+ *
+ * @module
+ */
+
 import {
   xhpke_secret_key_size,
   xhpke_public_key_size,
@@ -19,20 +75,24 @@ import { ensureInit, requireInit } from "./internal/init.js";
 import { codec, CodecError, type Codec } from "./cbor.js";
 import { equal, toHex } from "./internal/bytes.js";
 
-/** Size of the secret key seed in bytes (32). */
+/** Size of the secret key seed in bytes. */
 export const SECRET_KEY_SIZE = 32;
 
-/** Size of the public key in bytes (1216). */
+/** Size of the public key in bytes. */
 export const PUBLIC_KEY_SIZE = 1216;
 
-/** Size of the encapsulated key in bytes (1120). */
+/**
+ * Size of the encapsulated key in bytes, the prefix of every
+ * {@link PublicKey.seal} output.
+ */
 export const ENCAP_KEY_SIZE = 1120;
 
-/** Size of a fingerprint in bytes (32). */
+/** Size of a key fingerprint in bytes. */
 export const FINGERPRINT_SIZE = 32;
 
 /**
- * Get the size constants (requires WASM initialization).
+ * Returns the sizes in bytes as the Rust library defines them, the same values
+ * as the constants of this module.
  */
 export async function sizes(): Promise<{
   secretKey: number;
@@ -49,10 +109,7 @@ export async function sizes(): Promise<{
   };
 }
 
-/**
- * Fingerprint is a 32-byte unique identifier for an xHPKE key.
- * Backed by an opaque WASM handle.
- */
+/** A 256-bit unique identifier for an xHPKE key. */
 export class Fingerprint {
   /** @internal */
   readonly _wasm: WasmFingerprint;
@@ -66,7 +123,11 @@ export class Fingerprint {
     return new Fingerprint(inner);
   }
 
-  /** Creates a fingerprint from a 32-byte array. */
+  /**
+   * Creates a fingerprint from a 32-byte array.
+   *
+   * @throws If `bytes` is not 32 bytes long
+   */
   static async fromBytes(bytes: Uint8Array): Promise<Fingerprint> {
     await ensureInit();
     return new Fingerprint(WasmFingerprint.from_bytes(bytes));
@@ -88,10 +149,7 @@ export class Fingerprint {
   }
 }
 
-/**
- * PublicKey contains an X-Wing public key for hybrid post-quantum encryption.
- * Backed by an opaque WASM handle — key material stays in WASM memory.
- */
+/** An X-Wing public key for encrypting HPKE messages. */
 export class PublicKey {
   /** @internal */
   readonly _wasm: WasmPublicKey;
@@ -105,13 +163,23 @@ export class PublicKey {
     return new PublicKey(inner);
   }
 
-  /** Creates a public key from a 1216-byte array. */
+  /**
+   * Creates a public key from a 1216-byte array.
+   *
+   * @throws If `bytes` is not 1216 bytes long or not a valid X-Wing key
+   */
   static async fromBytes(bytes: Uint8Array): Promise<PublicKey> {
     await ensureInit();
     return new PublicKey(WasmPublicKey.from_bytes(bytes));
   }
 
-  /** Parses a PEM string into a public key. */
+  /**
+   * Parses a PEM string into a public key. The input must be exactly one
+   * `PUBLIC KEY` block, with no leading whitespace, strict base64 and LF or
+   * CRLF line endings throughout.
+   *
+   * @throws If the PEM is malformed or holds another kind of key
+   */
   static async fromPem(pem: string): Promise<PublicKey> {
     await ensureInit();
     return new PublicKey(WasmPublicKey.from_pem(pem));
@@ -122,7 +190,7 @@ export class PublicKey {
     return new Uint8Array(this._wasm.to_bytes());
   }
 
-  /** Serializes a public key into a PEM string. */
+  /** Serializes a public key into a `PUBLIC KEY` PEM block with LF line endings. */
   toPem(): string {
     return this._wasm.to_pem();
   }
@@ -132,15 +200,25 @@ export class PublicKey {
     return equal(this.toBytes(), other.toBytes());
   }
 
-  /** Returns a 256-bit unique identifier for this key (SHA256 of raw public key). */
+  /**
+   * Returns a 256-bit unique identifier for this key, the SHA-256 hash of the
+   * public key bytes.
+   */
   fingerprint(): Fingerprint {
     return Fingerprint._fromWasm(this._wasm.fingerprint());
   }
 
   /**
    * Creates an HPKE sender context for multi-message encryption to this
-   * public key. Returns a stateful Sender and the 1120-byte encapsulated
-   * key that must be transmitted to the recipient.
+   * public key. Messages it seals must be opened in order by a
+   * {@link Receiver} created from the returned encapsulated key.
+   *
+   * HPKE runs in base mode, which does not authenticate the sender. The
+   * recipient cannot verify who created the context.
+   *
+   * @param domain - Application domain, fixed for every message of the context
+   * @returns The stateful sender and the 1120-byte encapsulated key, which
+   *   must be transmitted to the recipient
    */
   newSender(domain: Uint8Array): { sender: Sender; encapKey: Uint8Array } {
     const wasmSender = this._wasm.new_sender(domain);
@@ -149,12 +227,17 @@ export class PublicKey {
   }
 
   /**
-   * Seal (encrypt) a message to this public key.
+   * Encrypts a message to this public key, also authenticating a second
+   * message that is not included in the output. Opening it with
+   * {@link SecretKey.open} needs the same second message and domain.
+   *
+   * HPKE runs in base mode, which does not authenticate the sender. The
+   * recipient cannot verify who sealed the message.
    *
    * @param msgToSeal - The message to encrypt
-   * @param msgToAuth - Additional data to authenticate (but not encrypt)
-   * @param domain - Application domain for context separation
-   * @returns Sealed data (encapsulated key + ciphertext)
+   * @param msgToAuth - The message to authenticate but not include
+   * @param domain - Application domain, which both sides must agree on
+   * @returns The 1120-byte encapsulated key followed by the ciphertext
    */
   seal(
     msgToSeal: Uint8Array,
@@ -166,8 +249,9 @@ export class PublicKey {
 }
 
 /**
- * SecretKey contains an X-Wing private key for hybrid post-quantum encryption.
- * Backed by an opaque WASM handle — key material stays in WASM memory.
+ * An X-Wing secret key for decrypting HPKE messages. The key stays in WASM
+ * memory unless {@link SecretKey.toBytes} or {@link SecretKey.toPem} copies it
+ * out.
  */
 export class SecretKey {
   /** @internal */
@@ -177,30 +261,40 @@ export class SecretKey {
     this._wasm = inner;
   }
 
-  /** Creates a new, random private key. */
+  /** Generates a new, random secret key. */
   static async generate(): Promise<SecretKey> {
     await ensureInit();
     return new SecretKey(WasmSecretKey.generate());
   }
 
-  /** Creates a private key from a 32-byte seed. */
+  /**
+   * Creates a secret key from a 32-byte seed.
+   *
+   * @throws If `bytes` is not 32 bytes long
+   */
   static async fromBytes(bytes: Uint8Array): Promise<SecretKey> {
     await ensureInit();
     return new SecretKey(WasmSecretKey.from_bytes(bytes));
   }
 
-  /** Parses a PEM string into a private key. */
+  /**
+   * Parses a PEM string into a secret key. The input must be exactly one
+   * `PRIVATE KEY` block, with no leading whitespace, strict base64 and LF or
+   * CRLF line endings throughout.
+   *
+   * @throws If the PEM is malformed or holds another kind of key
+   */
   static async fromPem(pem: string): Promise<SecretKey> {
     await ensureInit();
     return new SecretKey(WasmSecretKey.from_pem(pem));
   }
 
-  /** Converts a private key into a 32-byte seed. */
+  /** Converts a secret key into its 32-byte seed. */
   toBytes(): Uint8Array {
     return new Uint8Array(this._wasm.to_bytes());
   }
 
-  /** Serializes a private key into a PEM string. */
+  /** Serializes a secret key into a `PRIVATE KEY` PEM block with LF line endings. */
   toPem(): string {
     return this._wasm.to_pem();
   }
@@ -210,25 +304,44 @@ export class SecretKey {
     return PublicKey._fromWasm(this._wasm.public_key());
   }
 
-  /** Returns a 256-bit unique identifier for this key (SHA256 of raw public key). */
+  /**
+   * Returns a 256-bit unique identifier for this key, the SHA-256 hash of the
+   * public key bytes.
+   */
   fingerprint(): Fingerprint {
     return Fingerprint._fromWasm(this._wasm.fingerprint());
   }
 
   /**
-   * Creates an HPKE receiver context for multi-message decryption.
+   * Creates an HPKE receiver context for multi-message decryption. Messages
+   * must be opened in the order the {@link Sender} sealed them.
+   *
+   * HPKE runs in base mode, which does not authenticate the sender. The
+   * recipient cannot verify who created the context.
+   *
+   * @param encapKey - The 1120-byte encapsulated key from {@link PublicKey.newSender}
+   * @param domain - The same application domain the sender uses
+   * @returns The stateful receiver
+   * @throws If `encapKey` is not 1120 bytes long or is malformed
    */
   newReceiver(encapKey: Uint8Array, domain: Uint8Array): Receiver {
     return Receiver._fromWasm(this._wasm.new_receiver(encapKey, domain));
   }
 
   /**
-   * Open (decrypt) a sealed message with this secret key.
+   * Decrypts a message sealed to this key and checks the second message it
+   * authenticates.
    *
-   * @param sealed - The sealed data from `seal()`
-   * @param msgToAuth - The same additional authenticated data used during sealing
+   * HPKE runs in base mode, which does not authenticate the sender. The
+   * recipient cannot verify who sealed the message.
+   *
+   * @param sealed - The 1120-byte encapsulated key followed by the
+   *   ciphertext, as {@link PublicKey.seal} returns them
+   * @param msgToAuth - The same second message used during sealing
    * @param domain - The same application domain used during sealing
    * @returns The decrypted message
+   * @throws If the data is malformed, sealed to another key or tampered with,
+   *   or `msgToAuth` or `domain` differ
    */
   open(
     sealed: Uint8Array,
@@ -240,8 +353,10 @@ export class SecretKey {
 }
 
 /**
- * Sender is a stateful HPKE encryption context for multi-message
- * communication. Created via `PublicKey.newSender()`.
+ * A stateful HPKE encryption context for multi-message communication, created
+ * by {@link PublicKey.newSender}. Each seal uses the next nonce in the
+ * sequence, so identical messages encrypt differently. The matching
+ * {@link Receiver} must open messages in the order they were sealed.
  */
 export class Sender {
   private readonly inner: WasmSender;
@@ -255,15 +370,22 @@ export class Sender {
     return new Sender(inner);
   }
 
-  /** Encrypts a message using the next nonce in the sequence. */
+  /**
+   * Encrypts a message using the next nonce in the sequence.
+   *
+   * @param msgToSeal - The message to encrypt
+   * @param msgToAuth - The message to authenticate but not include
+   * @returns The ciphertext
+   */
   seal(msgToSeal: Uint8Array, msgToAuth: Uint8Array): Uint8Array {
     return new Uint8Array(this.inner.seal(msgToSeal, msgToAuth));
   }
 }
 
 /**
- * Receiver is a stateful HPKE decryption context for multi-message
- * communication. Created via `SecretKey.newReceiver()`.
+ * A stateful HPKE decryption context for multi-message communication, created
+ * by {@link SecretKey.newReceiver}. Messages must be opened in the order the
+ * {@link Sender} sealed them.
  */
 export class Receiver {
   private readonly inner: WasmReceiver;
@@ -277,18 +399,27 @@ export class Receiver {
     return new Receiver(inner);
   }
 
-  /** Decrypts a message using the next nonce in the sequence. */
+  /**
+   * Decrypts a message using the next nonce in the sequence.
+   *
+   * @param msgToOpen - The ciphertext from {@link Sender.seal}
+   * @param msgToAuth - The same second message used during sealing
+   * @returns The decrypted message
+   * @throws If the message is out of order or was tampered with, or
+   *   `msgToAuth` differs
+   */
   open(msgToOpen: Uint8Array, msgToAuth: Uint8Array): Uint8Array {
     return new Uint8Array(this.inner.open(msgToOpen, msgToAuth));
   }
 }
 
-/** The COSE algorithm identifier of the key type. */
+/** Private COSE algorithm identifier of X-Wing (ML-KEM-768 + X25519). */
 export const ALGORITHM_ID = -70001;
 
 /**
- * Codec of a public key as its bytes. Only the CBOR type is checked here, the
- * size and the key material are the Rust key's call.
+ * Codec of a public key as its 1216 bytes. Decoding throws a
+ * {@link CodecError} unless the bytes are a valid key. Calling its decode
+ * directly needs any async function of this package to have run first.
  */
 export const publicKey: Codec<PublicKey> = codec(
   (key) => {
@@ -313,8 +444,9 @@ export const publicKey: Codec<PublicKey> = codec(
 );
 
 /**
- * Codec of a fingerprint as its bytes. Only the CBOR type is checked here,
- * the size is the Rust fingerprint's call.
+ * Codec of a fingerprint as its 32 bytes. Decoding throws a {@link CodecError}
+ * unless the value is 32 bytes. Calling its decode directly needs any async
+ * function of this package to have run first.
  */
 export const fingerprint: Codec<Fingerprint> = codec(
   (print) => {

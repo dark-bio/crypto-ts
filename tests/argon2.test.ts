@@ -83,6 +83,9 @@ describe("argon2", () => {
     await expect(key(password, salt, 0, 64, 1, 32)).rejects.toThrow();
     await expect(key(password, salt, 1, 4, 1, 32)).rejects.toThrow();
     await expect(key(password, salt, 1, 64, 0, 32)).rejects.toThrow();
+    await expect(key(password, salt, 1, 8, 2, 32)).rejects.toThrow(
+      "memory cost must be at least 8 KiB per thread",
+    );
     await expect(key(password, salt, 1, 64, 1, 3)).rejects.toThrow();
     await expect(key(password, salt, 2 ** 32 + 1, 64, 1, 32)).rejects.toThrow();
     await expect(key(password, salt, 1, 2 ** 32 + 64, 1, 32)).rejects.toThrow();

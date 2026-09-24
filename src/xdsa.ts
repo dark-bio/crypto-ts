@@ -4,6 +4,34 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/**
+ * Composite ML-DSA-65 + Ed25519 digital signatures.
+ *
+ * https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
+ *
+ * A key signs a message with ML-DSA-65 and Ed25519 at once, and a signature
+ * verifies only if both halves do. Keys and signatures round-trip through
+ * fixed-size byte arrays. Keys also support PEM serialization.
+ *
+ * @example
+ * ```ts
+ * import { xdsa } from "@darkbio/crypto";
+ *
+ * const secret = await xdsa.SecretKey.generate();
+ * const verifier = secret.publicKey();
+ * const text = new TextEncoder();
+ *
+ * const signature = secret.sign(text.encode("hello"));
+ * console.log(verifier.verify(text.encode("hello"), signature)); // true
+ * console.log(verifier.verify(text.encode("tampered"), signature)); // false
+ *
+ * const restored = await xdsa.PublicKey.fromPem(verifier.toPem());
+ * console.log(restored.fingerprint().equals(verifier.fingerprint())); // true
+ * ```
+ *
+ * @module
+ */
+
 import {
   xdsa_secret_key_size,
   xdsa_public_key_size,
@@ -18,20 +46,30 @@ import { ensureInit, requireInit } from "./internal/init.js";
 import { codec, CodecError, type Codec } from "./cbor.js";
 import { equal, toHex } from "./internal/bytes.js";
 
-/** Size of the secret key in bytes (64). */
+/**
+ * Size of the secret key seed in bytes, the 32-byte ML-DSA-65 seed followed by
+ * the 32-byte Ed25519 seed.
+ */
 export const SECRET_KEY_SIZE = 64;
 
-/** Size of the public key in bytes (1984). */
+/**
+ * Size of the public key in bytes, the 1952-byte ML-DSA-65 key followed by the
+ * 32-byte Ed25519 key.
+ */
 export const PUBLIC_KEY_SIZE = 1984;
 
-/** Size of a signature in bytes (3373). */
+/**
+ * Size of a signature in bytes, the 3309-byte ML-DSA-65 signature followed by
+ * the 64-byte Ed25519 signature.
+ */
 export const SIGNATURE_SIZE = 3373;
 
-/** Size of a fingerprint in bytes (32). */
+/** Size of a key fingerprint in bytes. */
 export const FINGERPRINT_SIZE = 32;
 
 /**
- * Get the size constants (requires WASM initialization).
+ * Returns the sizes in bytes as the Rust library defines them, the same values
+ * as the constants of this module.
  */
 export async function sizes(): Promise<{
   secretKey: number;
@@ -48,10 +86,7 @@ export async function sizes(): Promise<{
   };
 }
 
-/**
- * Fingerprint is a 32-byte unique identifier for an xDSA key.
- * Backed by an opaque WASM handle.
- */
+/** A 256-bit unique identifier for an xDSA key. */
 export class Fingerprint {
   /** @internal */
   readonly _wasm: WasmFingerprint;
@@ -65,7 +100,11 @@ export class Fingerprint {
     return new Fingerprint(inner);
   }
 
-  /** Creates a fingerprint from a 32-byte array. */
+  /**
+   * Creates a fingerprint from a 32-byte array.
+   *
+   * @throws If `bytes` is not 32 bytes long
+   */
   static async fromBytes(bytes: Uint8Array): Promise<Fingerprint> {
     await ensureInit();
     return new Fingerprint(WasmFingerprint.from_bytes(bytes));
@@ -87,10 +126,7 @@ export class Fingerprint {
   }
 }
 
-/**
- * Signature is a 3373-byte xDSA signature.
- * Backed by an opaque WASM handle.
- */
+/** An xDSA signature, an ML-DSA-65 signature paired with an Ed25519 one. */
 export class Signature {
   /** @internal */
   readonly _wasm: WasmSignature;
@@ -104,7 +140,12 @@ export class Signature {
     return new Signature(inner);
   }
 
-  /** Creates a signature from a 3373-byte array. */
+  /**
+   * Creates a signature from a 3373-byte array. The halves are only checked
+   * when the signature is verified.
+   *
+   * @throws If `bytes` is not 3373 bytes long
+   */
   static async fromBytes(bytes: Uint8Array): Promise<Signature> {
     await ensureInit();
     return new Signature(WasmSignature.from_bytes(bytes));
@@ -117,9 +158,8 @@ export class Signature {
 }
 
 /**
- * PublicKey contains a composite ML-DSA-65 + Ed25519 public key for
+ * An xDSA public key, an ML-DSA-65 key paired with an Ed25519 key, for
  * verifying quantum resistant digital signatures.
- * Backed by an opaque WASM handle — key material stays in WASM memory.
  */
 export class PublicKey {
   /** @internal */
@@ -134,13 +174,23 @@ export class PublicKey {
     return new PublicKey(inner);
   }
 
-  /** Creates a public key from a 1984-byte array. */
+  /**
+   * Creates a public key from a 1984-byte array.
+   *
+   * @throws If `bytes` is not 1984 bytes long or not a valid composite key
+   */
   static async fromBytes(bytes: Uint8Array): Promise<PublicKey> {
     await ensureInit();
     return new PublicKey(WasmPublicKey.from_bytes(bytes));
   }
 
-  /** Parses a PEM string into a public key. */
+  /**
+   * Parses a PEM string into a public key. The input must be exactly one
+   * `PUBLIC KEY` block, with no leading whitespace, strict base64 and LF or
+   * CRLF line endings throughout.
+   *
+   * @throws If the PEM is malformed or holds another kind of key
+   */
   static async fromPem(pem: string): Promise<PublicKey> {
     await ensureInit();
     return new PublicKey(WasmPublicKey.from_pem(pem));
@@ -151,7 +201,7 @@ export class PublicKey {
     return new Uint8Array(this._wasm.to_bytes());
   }
 
-  /** Serializes a public key into a PEM string. */
+  /** Serializes a public key into a `PUBLIC KEY` PEM block with LF line endings. */
   toPem(): string {
     return this._wasm.to_pem();
   }
@@ -167,9 +217,13 @@ export class PublicKey {
   }
 
   /**
-   * Verifies a digital signature of the message.
+   * Verifies a digital signature of the message. Both the ML-DSA-65 and the
+   * Ed25519 halves must verify.
    *
-   * @returns true if the signature is valid, false otherwise (never throws)
+   * @param message - The signed message
+   * @param signature - The signature to check
+   * @returns True if the signature is valid for this key and message, false
+   *   otherwise
    */
   verify(message: Uint8Array, signature: Signature): boolean {
     return this._wasm.verify(message, signature._wasm);
@@ -177,9 +231,9 @@ export class PublicKey {
 }
 
 /**
- * SecretKey contains a composite ML-DSA-65 + Ed25519 private key for
- * creating quantum resistant digital signatures.
- * Backed by an opaque WASM handle — key material stays in WASM memory.
+ * An xDSA secret key, an ML-DSA-65 key paired with an Ed25519 key, for
+ * creating quantum resistant digital signatures. The key stays in WASM memory
+ * unless {@link SecretKey.toBytes} or {@link SecretKey.toPem} copies it out.
  */
 export class SecretKey {
   /** @internal */
@@ -189,30 +243,40 @@ export class SecretKey {
     this._wasm = inner;
   }
 
-  /** Creates a new, random private key. */
+  /** Generates a new, random secret key. */
   static async generate(): Promise<SecretKey> {
     await ensureInit();
     return new SecretKey(WasmSecretKey.generate());
   }
 
-  /** Creates a private key from a 64-byte seed. */
+  /**
+   * Creates a secret key from a 64-byte seed.
+   *
+   * @throws If `bytes` is not 64 bytes long
+   */
   static async fromBytes(bytes: Uint8Array): Promise<SecretKey> {
     await ensureInit();
     return new SecretKey(WasmSecretKey.from_bytes(bytes));
   }
 
-  /** Parses a PEM string into a private key. */
+  /**
+   * Parses a PEM string into a secret key. The input must be exactly one
+   * `PRIVATE KEY` block, with no leading whitespace, strict base64 and LF or
+   * CRLF line endings throughout.
+   *
+   * @throws If the PEM is malformed or holds another kind of key
+   */
   static async fromPem(pem: string): Promise<SecretKey> {
     await ensureInit();
     return new SecretKey(WasmSecretKey.from_pem(pem));
   }
 
-  /** Converts a secret key into a 64-byte array. */
+  /** Converts a secret key into its 64-byte seed. */
   toBytes(): Uint8Array {
     return new Uint8Array(this._wasm.to_bytes());
   }
 
-  /** Serializes a private key into a PEM string. */
+  /** Serializes a secret key into a `PRIVATE KEY` PEM block with LF line endings. */
   toPem(): string {
     return this._wasm.to_pem();
   }
@@ -222,23 +286,29 @@ export class SecretKey {
     return PublicKey._fromWasm(this._wasm.public_key());
   }
 
-  /** Returns a 256-bit unique identifier for this key. */
+  /** Returns a 256-bit unique identifier for this key, the same as its public key's. */
   fingerprint(): Fingerprint {
     return Fingerprint._fromWasm(this._wasm.fingerprint());
   }
 
-  /** Creates a digital signature of the message. */
+  /**
+   * Creates a digital signature of the message.
+   *
+   * @param message - The message to sign
+   * @returns The signature
+   */
   sign(message: Uint8Array): Signature {
     return Signature._fromWasm(this._wasm.sign(message));
   }
 }
 
-/** The COSE algorithm identifier of the key type. */
+/** Private COSE algorithm identifier of composite ML-DSA-65 + Ed25519 signatures. */
 export const ALGORITHM_ID = -70000;
 
 /**
- * Codec of a public key as its bytes. Only the CBOR type is checked here, the
- * size and the key material are the Rust key's call.
+ * Codec of a public key as its 1984 bytes. Decoding throws a
+ * {@link CodecError} unless the bytes are a valid key. Calling its decode
+ * directly needs any async function of this package to have run first.
  */
 export const publicKey: Codec<PublicKey> = codec(
   (key) => {
@@ -263,8 +333,9 @@ export const publicKey: Codec<PublicKey> = codec(
 );
 
 /**
- * Codec of a fingerprint as its bytes. Only the CBOR type is checked here,
- * the size is the Rust fingerprint's call.
+ * Codec of a fingerprint as its 32 bytes. Decoding throws a {@link CodecError}
+ * unless the value is 32 bytes. Calling its decode directly needs any async
+ * function of this package to have run first.
  */
 export const fingerprint: Codec<Fingerprint> = codec(
   (print) => {
