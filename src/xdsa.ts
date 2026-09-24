@@ -236,11 +236,18 @@ export class PublicKey {
  * unless {@link SecretKey.toBytes} or {@link SecretKey.toPem} copies it out.
  */
 export class SecretKey {
-  /** @internal */
-  readonly _wasm: WasmSecretKey;
+  private inner: WasmSecretKey | undefined;
 
   private constructor(inner: WasmSecretKey) {
-    this._wasm = inner;
+    this.inner = inner;
+  }
+
+  /** @internal */
+  get _wasm(): WasmSecretKey {
+    if (this.inner === undefined) {
+      throw new Error("secret key used after dispose");
+    }
+    return this.inner;
   }
 
   /** Generates a new, random secret key. */
@@ -299,6 +306,19 @@ export class SecretKey {
    */
   sign(message: Uint8Array): Signature {
     return Signature._fromWasm(this._wasm.sign(message));
+  }
+
+  /**
+   * Wipes the secret key held in WASM memory. Every later use of this key
+   * throws, and disposing it again does nothing. Copies already exported, such
+   * as by {@link SecretKey.toBytes}, are not affected. Without a dispose, the
+   * key is only wiped if the garbage collector finalizes it, which is not
+   * guaranteed.
+   */
+  dispose(): void {
+    const inner = this.inner;
+    this.inner = undefined;
+    inner?.free();
   }
 }
 

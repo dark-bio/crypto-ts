@@ -254,11 +254,18 @@ export class PublicKey {
  * out.
  */
 export class SecretKey {
-  /** @internal */
-  readonly _wasm: WasmSecretKey;
+  private inner: WasmSecretKey | undefined;
 
   private constructor(inner: WasmSecretKey) {
-    this._wasm = inner;
+    this.inner = inner;
+  }
+
+  /** @internal */
+  get _wasm(): WasmSecretKey {
+    if (this.inner === undefined) {
+      throw new Error("secret key used after dispose");
+    }
+    return this.inner;
   }
 
   /** Generates a new, random secret key. */
@@ -350,6 +357,19 @@ export class SecretKey {
   ): Uint8Array {
     return this._wasm.open(sealed, msgToAuth, domain);
   }
+
+  /**
+   * Wipes the secret key held in WASM memory. Every later use of this key
+   * throws, and disposing it again does nothing. Copies already exported, such
+   * as by {@link SecretKey.toBytes}, and receivers already created from it are
+   * not affected. Without a dispose, the key is only wiped if the garbage
+   * collector finalizes it, which is not guaranteed.
+   */
+  dispose(): void {
+    const inner = this.inner;
+    this.inner = undefined;
+    inner?.free();
+  }
 }
 
 /**
@@ -359,7 +379,7 @@ export class SecretKey {
  * {@link Receiver} must open messages in the order they were sealed.
  */
 export class Sender {
-  private readonly inner: WasmSender;
+  private inner: WasmSender | undefined;
 
   private constructor(inner: WasmSender) {
     this.inner = inner;
@@ -370,6 +390,13 @@ export class Sender {
     return new Sender(inner);
   }
 
+  private get wasm(): WasmSender {
+    if (this.inner === undefined) {
+      throw new Error("sender used after dispose");
+    }
+    return this.inner;
+  }
+
   /**
    * Encrypts a message using the next nonce in the sequence.
    *
@@ -378,7 +405,19 @@ export class Sender {
    * @returns The ciphertext
    */
   seal(msgToSeal: Uint8Array, msgToAuth: Uint8Array): Uint8Array {
-    return this.inner.seal(msgToSeal, msgToAuth);
+    return this.wasm.seal(msgToSeal, msgToAuth);
+  }
+
+  /**
+   * Wipes the keys of this context held in WASM memory. Every later use of the
+   * sender throws, and disposing it again does nothing. Without a dispose, the
+   * keys are only wiped if the garbage collector finalizes the sender, which is
+   * not guaranteed.
+   */
+  dispose(): void {
+    const inner = this.inner;
+    this.inner = undefined;
+    inner?.free();
   }
 }
 
@@ -388,7 +427,7 @@ export class Sender {
  * {@link Sender} sealed them.
  */
 export class Receiver {
-  private readonly inner: WasmReceiver;
+  private inner: WasmReceiver | undefined;
 
   private constructor(inner: WasmReceiver) {
     this.inner = inner;
@@ -397,6 +436,13 @@ export class Receiver {
   /** @internal */
   static _fromWasm(inner: WasmReceiver): Receiver {
     return new Receiver(inner);
+  }
+
+  private get wasm(): WasmReceiver {
+    if (this.inner === undefined) {
+      throw new Error("receiver used after dispose");
+    }
+    return this.inner;
   }
 
   /**
@@ -409,7 +455,19 @@ export class Receiver {
    *   `msgToAuth` differs
    */
   open(msgToOpen: Uint8Array, msgToAuth: Uint8Array): Uint8Array {
-    return this.inner.open(msgToOpen, msgToAuth);
+    return this.wasm.open(msgToOpen, msgToAuth);
+  }
+
+  /**
+   * Wipes the keys of this context held in WASM memory. Every later use of the
+   * receiver throws, and disposing it again does nothing. Without a dispose,
+   * the keys are only wiped if the garbage collector finalizes the receiver,
+   * which is not guaranteed.
+   */
+  dispose(): void {
+    const inner = this.inner;
+    this.inner = undefined;
+    inner?.free();
   }
 }
 

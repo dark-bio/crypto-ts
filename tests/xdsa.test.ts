@@ -19,6 +19,8 @@ import {
   FINGERPRINT_SIZE,
 } from "../src/xdsa.js";
 import { publicKey, fingerprint } from "../src/xdsa.js";
+import * as cose from "../src/cose.js";
+import * as cwt from "../src/cwt.js";
 
 describe("xdsa", () => {
   function toHex(bytes: Uint8Array): string {
@@ -255,5 +257,55 @@ describe("xdsa", () => {
         fingerprint.encode(sk.publicKey() as unknown as Fingerprint),
       ).toThrow(CodecError);
     });
+  });
+
+  // Tests that a disposed secret key refuses every operation, directly and
+  // through COSE and CWT, that values derived from it earlier stay usable, and
+  // that disposing it again does nothing.
+  it("refuses a disposed secret key", async () => {
+    const sk = await SecretKey.generate();
+    const domain = new TextEncoder().encode("dispose");
+    const message = new TextEncoder().encode("message");
+    const pk = sk.publicKey();
+    const sig = sk.sign(message);
+
+    sk.dispose();
+    const operations: [string, () => unknown][] = [
+      ["toBytes", () => sk.toBytes()],
+      ["toPem", () => sk.toPem()],
+      ["publicKey", () => sk.publicKey()],
+      ["fingerprint", () => sk.fingerprint()],
+      ["sign", () => sk.sign(message)],
+    ];
+    for (const [name, run] of operations) {
+      expect(run, name).toThrow(/used after dispose/);
+    }
+    await expect(
+      cose.signDetached(cbor.bytes.value(message), sk, domain),
+    ).rejects.toThrow(/used after dispose/);
+
+    const Subject = cbor.map({
+      sub: cwt.claims.subject,
+      nbf: cwt.claims.notBefore,
+    });
+    await expect(
+      cwt.issue(Subject.value({ sub: "ark", nbf: 1n }), sk, domain),
+    ).rejects.toThrow(/used after dispose/);
+
+    expect(pk.verify(message, sig)).toBe(true);
+    sk.dispose();
+  });
+
+  // Tests that disposing a secret key while an asynchronous call is about to
+  // use it rejects that call instead of reaching the freed key.
+  it("rejects a call pending on a disposed key", async () => {
+    const sk = await SecretKey.generate();
+    const pending = cose.signDetached(
+      cbor.bytes.value(new Uint8Array(1)),
+      sk,
+      new TextEncoder().encode("dispose"),
+    );
+    sk.dispose();
+    await expect(pending).rejects.toThrow(/used after dispose/);
   });
 });

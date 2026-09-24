@@ -20,6 +20,8 @@ import {
   FINGERPRINT_SIZE,
 } from "../src/xhpke.js";
 import { publicKey, fingerprint } from "../src/xhpke.js";
+import * as cose from "../src/cose.js";
+import { SecretKey as XdsaSecretKey } from "../src/xdsa.js";
 
 describe("xhpke", () => {
   function toHex(bytes: Uint8Array): string {
@@ -407,5 +409,60 @@ describe("xhpke", () => {
         fingerprint.encode(sk.publicKey() as unknown as Fingerprint),
       ).toThrow(CodecError);
     });
+  });
+
+  // Tests that disposed secret keys, senders and receivers refuse every
+  // operation, directly and through COSE, that a receiver created from a key
+  // before its disposal stays usable, and that disposing again does nothing.
+  it("refuses disposed keys and contexts", async () => {
+    const sk = await SecretKey.generate();
+    const signer = await XdsaSecretKey.generate();
+    const domain = new TextEncoder().encode("dispose");
+    const aad = new Uint8Array(0);
+    const { sender, encapKey } = sk.publicKey().newSender(domain);
+    const receiver = sk.newReceiver(encapKey, domain);
+    const sealed = sk.publicKey().seal(new Uint8Array(1), aad, domain);
+    const sealedCose = await cose.seal(
+      cbor.bytes.value(new Uint8Array(1)),
+      cbor.bytes.value(aad),
+      signer,
+      sk.publicKey(),
+      domain,
+    );
+
+    sk.dispose();
+    const operations: [string, () => unknown][] = [
+      ["toBytes", () => sk.toBytes()],
+      ["toPem", () => sk.toPem()],
+      ["publicKey", () => sk.publicKey()],
+      ["fingerprint", () => sk.fingerprint()],
+      ["newReceiver", () => sk.newReceiver(encapKey, domain)],
+      ["open", () => sk.open(sealed, aad, domain)],
+    ];
+    for (const [name, run] of operations) {
+      expect(run, name).toThrow(/used after dispose/);
+    }
+    await expect(
+      cose.open(
+        cbor.bytes.bytes(sealedCose),
+        cbor.bytes.value(aad),
+        sk,
+        signer.publicKey(),
+        domain,
+      ),
+    ).rejects.toThrow(/used after dispose/);
+
+    const message = new TextEncoder().encode("message");
+    const ciphertext = sender.seal(message, aad);
+    expect(receiver.open(ciphertext, aad)).toEqual(message);
+
+    sender.dispose();
+    receiver.dispose();
+    expect(() => sender.seal(message, aad)).toThrow(/used after dispose/);
+    expect(() => receiver.open(ciphertext, aad)).toThrow(/used after dispose/);
+
+    for (const disposed of [sk, sender, receiver]) {
+      disposed.dispose();
+    }
   });
 });
