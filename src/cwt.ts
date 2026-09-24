@@ -338,7 +338,7 @@ export async function issue<C>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(cwt_issue(serialize(claims), signer._wasm, domain));
+  return cwt_issue(serialize(claims), signer._wasm, domain);
 }
 
 /**
@@ -379,7 +379,7 @@ export async function verify<C>(
     domain,
     nowToBigInt(now),
   );
-  return token.codec.decode(parse(new Uint8Array(payload)));
+  return token.codec.decode(parse(payload));
 }
 
 /**
@@ -413,5 +413,5 @@ export async function signer(token: Uint8Array): Promise<xdsa.Fingerprint> {
  */
 export async function peek<C>(token: Decodable<C>): Promise<C> {
   await ensureInit();
-  return token.codec.decode(parse(new Uint8Array(cwt_peek(token.bytes))));
+  return token.codec.decode(parse(cwt_peek(token.bytes)));
 }

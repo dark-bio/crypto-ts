@@ -26,7 +26,8 @@ import { u32 } from "./internal/limits.js";
  * RFC 9106 Section 4 recommends `time = 1`, `memory = 2 * 1024 * 1024`
  * (2 GiB) and `threads = 4`. Its second recommendation uses `time = 3`,
  * `memory = 64 * 1024` (64 MiB) and `threads = 4`. Both use a random 16-byte
- * salt and a 32-byte output.
+ * salt and a 32-byte output. A single WASM allocation stays below 2 GiB, so
+ * only the second profile fits within the memory limit below.
  *
  * `time` is the number of passes and `memory` is the total working memory in
  * KiB. `threads` is Argon2's lane count, an algorithm parameter that changes
@@ -38,9 +39,10 @@ import { u32 } from "./internal/limits.js";
  *
  * - `time` must be at least 1.
  * - `threads` must be at least 1.
- * - `memory` must be at least `8 * threads` KiB and at most 2 GiB (2097152 KiB).
+ * - `memory` must be at least `8 * threads` KiB and at most 2097151 KiB, one
+ *   KiB short of 2 GiB.
  * - `salt` must be at least 8 bytes.
- * - `outLen` must be at least 4 bytes.
+ * - `outLen` must be at least 4 bytes and at most 2147483647 bytes.
  *
  * @example
  * ```ts
@@ -74,14 +76,12 @@ export async function key(
   outLen: number,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(
-    argon2_key(
-      password,
-      salt,
-      u32(time, "time"),
-      u32(memory, "memory"),
-      u32(threads, "threads"),
-      u32(outLen, "outLen"),
-    ),
+  return argon2_key(
+    password,
+    salt,
+    u32(time, "time"),
+    u32(memory, "memory"),
+    u32(threads, "threads"),
+    u32(outLen, "outLen"),
   );
 }

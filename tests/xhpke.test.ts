@@ -238,6 +238,23 @@ describe("xhpke", () => {
       expect(new TextDecoder().decode(pt3)).toBe("third message");
     });
 
+    // Tests that a message opened out of order is rejected without consuming
+    // a nonce, so the messages still open once taken in order.
+    it("recovers after rejecting an out of order message", async () => {
+      const sk = await SecretKey.generate();
+      const domain = new TextEncoder().encode("order-test");
+      const { sender, encapKey } = sk.publicKey().newSender(domain);
+      const receiver = sk.newReceiver(encapKey, domain);
+      const aad = new Uint8Array(0);
+
+      const ct1 = sender.seal(new TextEncoder().encode("first"), aad);
+      const ct2 = sender.seal(new TextEncoder().encode("second"), aad);
+
+      expect(() => receiver.open(ct2, aad)).toThrow(/opening failed/);
+      expect(new TextDecoder().decode(receiver.open(ct1, aad))).toBe("first");
+      expect(new TextDecoder().decode(receiver.open(ct2, aad))).toBe("second");
+    });
+
     it("produces different ciphertexts for identical messages", async () => {
       const sk = await SecretKey.generate();
       const pk = await sk.publicKey();

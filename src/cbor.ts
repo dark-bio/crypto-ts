@@ -225,7 +225,11 @@ export const nil: Codec<null> = primitive(
   "not null",
 );
 
-/** A UTF-8 text string. */
+/**
+ * A UTF-8 text string. Decoding keeps every character, a leading U+FEFF
+ * included. Encoding rejects a string with a lone surrogate, since it has no
+ * UTF-8 form.
+ */
 export const text: Codec<string> = primitive(
   (value): value is string => typeof value === "string",
   "not text",
@@ -499,7 +503,7 @@ export function map<F extends Fields>(fields: F): Codec<Values<F>> {
  * @returns The CBOR bytes
  * @throws CodecError on a value of the wrong shape
  * @throws If the encoding falls outside the restricted type system, such as a
- *   float in a raw value
+ *   float in a raw value or text with a lone surrogate
  */
 export async function encode<T>(item: Encodable<T>): Promise<Uint8Array> {
   const data = serialize(item);

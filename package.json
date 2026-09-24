@@ -1,6 +1,6 @@
 {
   "name": "@darkbio/crypto",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "author": "Péter Szilágyi <peter@dark.bio>",
   "description": "Cryptography primitives and wrappers",
   "repository": {
@@ -21,7 +21,7 @@
     "dist"
   ],
   "scripts": {
-    "build:wasm": "wasm-pack build crates/wasm --target web --out-dir ../../src/wasm",
+    "build:wasm": "wasm-pack build crates/wasm --target web --out-dir ../../src/wasm -- --locked",
     "build:ts": "node node_modules/typescript/bin/tsc && vite build",
     "build": "npm run build:wasm && npm run build:ts",
     "test": "vitest",
@@ -36,6 +36,7 @@
     "@typescript/typescript6": "^6.0.2",
     "@vitest/browser-playwright": "^5.0.0",
     "playwright": "^1.62.1",
+    "prettier": "^3.9.9",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vite-plugin-dts": "^5.1.0",

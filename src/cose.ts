@@ -143,13 +143,11 @@ export async function sign<E, A>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(
-    cose_sign(
-      serialize(msgToEmbed),
-      serialize(msgToAuth),
-      signer._wasm,
-      domain,
-    ),
+  return cose_sign(
+    serialize(msgToEmbed),
+    serialize(msgToAuth),
+    signer._wasm,
+    domain,
   );
 }
 
@@ -174,9 +172,7 @@ export async function signDetached<A>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(
-    cose_sign_detached(serialize(msgToAuth), signer._wasm, domain),
-  );
+  return cose_sign_detached(serialize(msgToAuth), signer._wasm, domain);
 }
 
 /**
@@ -213,7 +209,7 @@ export async function verify<T, A>(
     domain,
     driftToBigInt(maxDriftSecs),
   );
-  return msgToCheck.codec.decode(parse(new Uint8Array(payload)));
+  return msgToCheck.codec.decode(parse(payload));
 }
 
 /**
@@ -282,9 +278,7 @@ export async function signer(signature: Uint8Array): Promise<XdsaFingerprint> {
  */
 export async function peek<T>(signature: Decodable<T>): Promise<T> {
   await ensureInit();
-  return signature.codec.decode(
-    parse(new Uint8Array(cose_peek(signature.bytes))),
-  );
+  return signature.codec.decode(parse(cose_peek(signature.bytes)));
 }
 
 /**
@@ -329,15 +323,18 @@ export async function seal<S, A>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(
-    cose_seal(
-      serialize(msgToSeal),
+  const plaintext = serialize(msgToSeal);
+  try {
+    return cose_seal(
+      plaintext,
       serialize(msgToAuth),
       signerKey._wasm,
       recipientKey._wasm,
       domain,
-    ),
-  );
+    );
+  } finally {
+    plaintext.fill(0);
+  }
 }
 
 /**
@@ -377,7 +374,11 @@ export async function open<T, A>(
     domain,
     driftToBigInt(maxDriftSecs),
   );
-  return msgToOpen.codec.decode(parse(new Uint8Array(payload)));
+  try {
+    return msgToOpen.codec.decode(parse(payload));
+  } finally {
+    payload.fill(0);
+  }
 }
 
 /**
@@ -402,9 +403,7 @@ export async function encrypt<A>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(
-    cose_encrypt(sign1, serialize(msgToAuth), recipientKey._wasm, domain),
-  );
+  return cose_encrypt(sign1, serialize(msgToAuth), recipientKey._wasm, domain);
 }
 
 /**
@@ -430,7 +429,10 @@ export async function decrypt<A>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(
-    cose_decrypt(msgToOpen, serialize(msgToAuth), recipientKey._wasm, domain),
+  return cose_decrypt(
+    msgToOpen,
+    serialize(msgToAuth),
+    recipientKey._wasm,
+    domain,
   );
 }
