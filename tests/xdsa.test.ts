@@ -170,6 +170,36 @@ describe("xdsa", () => {
     expect(toHex(sig2.toBytes())).toBe(toHex(sig.toBytes()));
   });
 
+  // Tests that a signature fails when either half alone is tampered with, the
+  // ML-DSA-65 half first and the Ed25519 half in the last 64 bytes.
+  it("rejects a tampered signature half", async () => {
+    const sk = await SecretKey.generate();
+    const message = new TextEncoder().encode("halves");
+    const bytes = sk.sign(message).toBytes();
+
+    for (const index of [0, SIGNATURE_SIZE - 64]) {
+      const tampered = bytes.slice();
+      tampered[index] ^= 1;
+      const sig = await Signature.fromBytes(tampered);
+      expect(sk.publicKey().verify(message, sig), `${index}`).toBe(false);
+    }
+  });
+
+  it("accepts LF or CRLF PEM line endings but not a mix", async () => {
+    const sk = await SecretKey.generate();
+    const pem = sk.toPem();
+
+    const crlf = await SecretKey.fromPem(pem.replaceAll("\n", "\r\n"));
+    expect(toHex(crlf.toBytes())).toBe(toHex(sk.toBytes()));
+
+    // One body line ending in CRLF within an LF block
+    const lines = pem.split("\n");
+    lines[1] += "\r";
+    await expect(SecretKey.fromPem(lines.join("\n"))).rejects.toThrow(
+      /stray line endings/,
+    );
+  });
+
   it("roundtrips Fingerprint through bytes", async () => {
     const sk = await SecretKey.generate();
     const fp = await sk.fingerprint();

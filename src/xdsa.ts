@@ -112,7 +112,7 @@ export class Fingerprint {
 
   /** Converts a fingerprint into a 32-byte array. */
   toBytes(): Uint8Array {
-    return new Uint8Array(this._wasm.to_bytes());
+    return this._wasm.to_bytes();
   }
 
   /** Renders a fingerprint as lowercase hex. */
@@ -153,7 +153,7 @@ export class Signature {
 
   /** Converts a signature into a 3373-byte array. */
   toBytes(): Uint8Array {
-    return new Uint8Array(this._wasm.to_bytes());
+    return this._wasm.to_bytes();
   }
 }
 
@@ -198,7 +198,7 @@ export class PublicKey {
 
   /** Converts a public key into a 1984-byte array. */
   toBytes(): Uint8Array {
-    return new Uint8Array(this._wasm.to_bytes());
+    return this._wasm.to_bytes();
   }
 
   /** Serializes a public key into a `PUBLIC KEY` PEM block with LF line endings. */
@@ -273,7 +273,7 @@ export class SecretKey {
 
   /** Converts a secret key into its 64-byte seed. */
   toBytes(): Uint8Array {
-    return new Uint8Array(this._wasm.to_bytes());
+    return this._wasm.to_bytes();
   }
 
   /** Serializes a secret key into a `PRIVATE KEY` PEM block with LF line endings. */

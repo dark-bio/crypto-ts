@@ -5,6 +5,7 @@
 // license that can be found in the LICENSE file.
 
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroizing;
 
 /// Maximum size of a single randomness request (64 MiB). Far beyond any key or
 /// nonce material need; absurd sizes (including negative JS numbers coerced to
@@ -12,13 +13,15 @@ use wasm_bindgen::prelude::*;
 /// allocation failure.
 const MAX_OUTPUT_LEN: usize = 64 * 1024 * 1024;
 
-/// Generates a buffer of up to 64 MiB filled with randomness.
+/// Generates a buffer of up to 64 MiB filled with randomness. The bytes are
+/// wiped from WASM memory before return, since they often become key material.
 #[wasm_bindgen]
-pub fn rand_generate(bytes: usize) -> Result<Vec<u8>, JsError> {
+pub fn rand_generate(bytes: usize) -> Result<js_sys::Uint8Array, JsError> {
     if bytes > MAX_OUTPUT_LEN {
         return Err(JsError::new(
             "requested size must be at most 67108864 bytes",
         ));
     }
-    Ok(darkbio_crypto::rand::generate(bytes))
+    let random = Zeroizing::new(darkbio_crypto::rand::generate(bytes));
+    Ok(js_sys::Uint8Array::from(&random[..]))
 }

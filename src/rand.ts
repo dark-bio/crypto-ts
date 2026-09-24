@@ -31,5 +31,5 @@ import { u32 } from "./internal/limits.js";
  */
 export async function generate(bytes: number): Promise<Uint8Array> {
   await ensureInit();
-  return new Uint8Array(rand_generate(u32(bytes, "bytes")));
+  return rand_generate(u32(bytes, "bytes"));
 }

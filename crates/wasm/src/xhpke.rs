@@ -10,6 +10,7 @@
 
 use darkbio_crypto::xhpke;
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroizing;
 
 /// Size of the secret key seed in bytes.
 #[wasm_bindgen]
@@ -50,31 +51,40 @@ impl XhpkeSecretKey {
         }
     }
 
-    /// Creates a private key from a 32-byte seed.
-    pub fn from_bytes(bytes: &[u8]) -> Result<XhpkeSecretKey, JsError> {
-        let seed: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| JsError::new("secret key must be 32 bytes"))?;
+    /// Creates a private key from a 32-byte seed, wiping the seed from WASM
+    /// memory before return.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<XhpkeSecretKey, JsError> {
+        let bytes = Zeroizing::new(bytes);
+        let seed: Zeroizing<[u8; 32]> = Zeroizing::new(
+            bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| JsError::new("secret key must be 32 bytes"))?,
+        );
         Ok(Self {
             inner: xhpke::SecretKey::from_bytes(&seed),
         })
     }
 
-    /// Parses a secret key from PEM format.
-    pub fn from_pem(pem: &str) -> Result<XhpkeSecretKey, JsError> {
+    /// Parses a secret key from PEM format, wiping the PEM from WASM memory
+    /// before return.
+    pub fn from_pem(pem: String) -> Result<XhpkeSecretKey, JsError> {
+        let pem = Zeroizing::new(pem);
         Ok(Self {
-            inner: xhpke::SecretKey::from_pem(pem).map_err(|e| JsError::new(&e.to_string()))?,
+            inner: xhpke::SecretKey::from_pem(&pem).map_err(|e| JsError::new(&e.to_string()))?,
         })
     }
 
-    /// Serializes the secret key to a 32-byte seed.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.inner.to_bytes().to_vec()
+    /// Serializes the secret key to a 32-byte seed, copied straight into JS
+    /// memory so no unwiped copy is left in WASM memory.
+    pub fn to_bytes(&self) -> js_sys::Uint8Array {
+        js_sys::Uint8Array::from(&self.inner.to_bytes()[..])
     }
 
-    /// Serializes the secret key to PEM format.
-    pub fn to_pem(&self) -> String {
-        self.inner.to_pem().to_string()
+    /// Serializes the secret key to PEM format, copied straight into a JS
+    /// string so no unwiped copy is left in WASM memory.
+    pub fn to_pem(&self) -> js_sys::JsString {
+        js_sys::JsString::from(self.inner.to_pem().as_str())
     }
 
     /// Returns the public key corresponding to this private key.
@@ -105,14 +115,15 @@ impl XhpkeSecretKey {
         Ok(XhpkeReceiver { inner: receiver })
     }
 
-    /// Decrypts a single-shot sealed message.
+    /// Decrypts a single-shot sealed message. The plaintext is copied straight
+    /// into JS memory so no unwiped copy is left in WASM memory.
     /// Input: encapsulated key (1120 bytes) || ciphertext
     pub fn open(
         &self,
         sealed: &[u8],
         msg_to_auth: &[u8],
         domain: &[u8],
-    ) -> Result<Vec<u8>, JsError> {
+    ) -> Result<js_sys::Uint8Array, JsError> {
         if sealed.len() < xhpke::ENCAP_KEY_SIZE {
             return Err(JsError::new("sealed data too short"));
         }
@@ -121,9 +132,12 @@ impl XhpkeSecretKey {
             .map_err(|_| JsError::new("invalid encapsulated key"))?;
         let ciphertext = &sealed[xhpke::ENCAP_KEY_SIZE..];
 
-        self.inner
-            .open(&session_key, ciphertext, msg_to_auth, domain)
-            .map_err(|e| JsError::new(&e.to_string()))
+        let plaintext = Zeroizing::new(
+            self.inner
+                .open(&session_key, ciphertext, msg_to_auth, domain)
+                .map_err(|e| JsError::new(&e.to_string()))?,
+        );
+        Ok(js_sys::Uint8Array::from(&plaintext[..]))
     }
 }
 
@@ -182,17 +196,19 @@ impl XhpkePublicKey {
         })
     }
 
-    /// Encrypts a single-shot message to this public key.
+    /// Encrypts a single-shot message to this public key, wiping the plaintext
+    /// from WASM memory before return.
     /// Returns: encapsulated key (1120 bytes) || ciphertext
     pub fn seal(
         &self,
-        msg_to_seal: &[u8],
+        msg_to_seal: Vec<u8>,
         msg_to_auth: &[u8],
         domain: &[u8],
     ) -> Result<Vec<u8>, JsError> {
+        let msg_to_seal = Zeroizing::new(msg_to_seal);
         let (encap_key, ciphertext) = self
             .inner
-            .seal(msg_to_seal, msg_to_auth, domain)
+            .seal(&msg_to_seal, msg_to_auth, domain)
             .map_err(|e| JsError::new(&e.to_string()))?;
 
         let mut result = Vec::with_capacity(encap_key.len() + ciphertext.len());
@@ -240,10 +256,12 @@ impl XhpkeSender {
         self.encap_key.clone()
     }
 
-    /// Encrypts a message using the next nonce in the sequence.
-    pub fn seal(&mut self, msg_to_seal: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, JsError> {
+    /// Encrypts a message using the next nonce in the sequence, wiping the
+    /// plaintext from WASM memory before return.
+    pub fn seal(&mut self, msg_to_seal: Vec<u8>, msg_to_auth: &[u8]) -> Result<Vec<u8>, JsError> {
+        let msg_to_seal = Zeroizing::new(msg_to_seal);
         self.inner
-            .seal(msg_to_seal, msg_to_auth)
+            .seal(&msg_to_seal, msg_to_auth)
             .map_err(|e| JsError::new(&e.to_string()))
     }
 }
@@ -256,10 +274,19 @@ pub struct XhpkeReceiver {
 
 #[wasm_bindgen]
 impl XhpkeReceiver {
-    /// Decrypts a message using the next nonce in the sequence.
-    pub fn open(&mut self, msg_to_open: &[u8], msg_to_auth: &[u8]) -> Result<Vec<u8>, JsError> {
-        self.inner
-            .open(msg_to_open, msg_to_auth)
-            .map_err(|e| JsError::new(&e.to_string()))
+    /// Decrypts a message using the next nonce in the sequence. The plaintext
+    /// is copied straight into JS memory so no unwiped copy is left in WASM
+    /// memory.
+    pub fn open(
+        &mut self,
+        msg_to_open: &[u8],
+        msg_to_auth: &[u8],
+    ) -> Result<js_sys::Uint8Array, JsError> {
+        let plaintext = Zeroizing::new(
+            self.inner
+                .open(msg_to_open, msg_to_auth)
+                .map_err(|e| JsError::new(&e.to_string()))?,
+        );
+        Ok(js_sys::Uint8Array::from(&plaintext[..]))
     }
 }

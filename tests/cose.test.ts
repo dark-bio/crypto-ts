@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { decode as cborgDecode, encode as cborgEncode } from "cborg";
 import * as cbor from "../src/cbor.js";
 import { CodecError } from "../src/cbor.js";
@@ -23,6 +23,7 @@ import {
 } from "../src/cose.js";
 import { SecretKey as XdsaSecretKey } from "../src/xdsa.js";
 import { SecretKey as XhpkeSecretKey } from "../src/xhpke.js";
+import coseFixtures from "./testdata/cose/v0.16.json";
 
 const Message = cbor.tuple(cbor.text, cbor.uint);
 const Auth = cbor.tuple(cbor.uint);
@@ -33,6 +34,14 @@ describe("cose", () => {
     return Array.from(bytes)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
+  }
+
+  function fromHex(hex: string): Uint8Array {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    }
+    return bytes;
   }
 
   describe("sign/verify", () => {
@@ -476,6 +485,137 @@ describe("cose", () => {
         domain,
       );
       expect(recovered).toEqual(payload);
+    });
+  });
+
+  // Tests that signature timestamps pass up to the drift bound in either
+  // direction and fail one second beyond it, for every verifying operation.
+  describe("drift bound", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("accepts timestamps up to the bound and rejects beyond it", async () => {
+      const sk = await XdsaSecretKey.generate();
+      const rk = await XhpkeSecretKey.generate();
+      const domain = new TextEncoder().encode("drift");
+      const msg = Message.value(["drift", 1n]);
+      const auth = Auth.value([2n]);
+
+      const operations: [
+        string,
+        () => Promise<Uint8Array>,
+        (data: Uint8Array) => Promise<unknown>,
+      ][] = [
+        [
+          "embedded",
+          () => sign(msg, auth, sk, domain),
+          (data) =>
+            verify(Message.bytes(data), auth, sk.publicKey(), domain, 60),
+        ],
+        [
+          "detached",
+          () => signDetached(auth, sk, domain),
+          (data) => verifyDetached(data, auth, sk.publicKey(), domain, 60),
+        ],
+        [
+          "sealed",
+          () => seal(msg, auth, sk, rk.publicKey(), domain),
+          (data) =>
+            open(Message.bytes(data), auth, rk, sk.publicKey(), domain, 60),
+        ],
+      ];
+      const clock = vi.spyOn(Date, "now");
+      const signedAt = 1_700_000_000;
+      for (const [name, make, check] of operations) {
+        clock.mockReturnValue(signedAt * 1000);
+        const data = await make();
+
+        for (const offset of [-60, 60]) {
+          clock.mockReturnValue((signedAt + offset) * 1000);
+          const ok = await check(data).then(
+            () => true,
+            () => false,
+          );
+          expect(ok, `${name} ${offset}`).toBe(true);
+        }
+        for (const offset of [-61, 61]) {
+          clock.mockReturnValue((signedAt + offset) * 1000);
+          await expect(check(data), `${name} ${offset}`).rejects.toThrow(
+            /stale/,
+          );
+        }
+      }
+    });
+  });
+
+  // Tests that the v0.16 fixture corpus still validates, since that was in the
+  // first public release of the Ark, so we can't change the format anymore.
+  describe("v0.16 fixtures", () => {
+    it("verifies and opens the committed messages", async () => {
+      const signingKey = await XdsaSecretKey.fromBytes(
+        fromHex(coseFixtures.xdsa_seed),
+      );
+      const recipientKey = await XhpkeSecretKey.fromBytes(
+        fromHex(coseFixtures.xhpke_seed),
+      );
+      const domain = fromHex(coseFixtures.domain);
+      const payload = fromHex(coseFixtures.payload);
+      const aad = cbor.bytes.value(fromHex(coseFixtures.aad));
+      const sign1 = fromHex(coseFixtures.sign1);
+      const encrypt0 = fromHex(coseFixtures.encrypt0);
+
+      // Verify the committed signature and check the embedded payload
+      const got = await verify(
+        cbor.bytes.bytes(sign1),
+        aad,
+        signingKey.publicKey(),
+        domain,
+      );
+      expect(got).toEqual(payload);
+
+      // Wrong domains and tampered structures must fail
+      await expect(
+        verify(
+          cbor.bytes.bytes(sign1),
+          aad,
+          signingKey.publicKey(),
+          new TextEncoder().encode("wrong"),
+        ),
+      ).rejects.toThrow();
+
+      const tamperedSign1 = sign1.slice();
+      tamperedSign1[tamperedSign1.length - 1] ^= 1;
+      await expect(
+        verify(
+          cbor.bytes.bytes(tamperedSign1),
+          aad,
+          signingKey.publicKey(),
+          domain,
+        ),
+      ).rejects.toThrow();
+
+      // Open the committed encrypted message and check the payload
+      const opened = await open(
+        cbor.bytes.bytes(encrypt0),
+        aad,
+        recipientKey,
+        signingKey.publicKey(),
+        domain,
+      );
+      expect(opened).toEqual(payload);
+
+      const tamperedEncrypt0 = encrypt0.slice();
+      tamperedEncrypt0[tamperedEncrypt0.length - 1] ^= 1;
+      await expect(
+        open(
+          cbor.bytes.bytes(tamperedEncrypt0),
+          aad,
+          recipientKey,
+          signingKey.publicKey(),
+          domain,
+        ),
+      ).rejects.toThrow();
     });
   });
 });

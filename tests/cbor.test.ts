@@ -231,5 +231,56 @@ describe("cbor", () => {
       const misordered = new Uint8Array([0xa2, 0x02, 0x02, 0x01, 0x01]);
       await expect(cbor.decode(cbor.raw.bytes(misordered))).rejects.toThrow();
     });
+
+    // Tests that every encoding owns its buffer exactly, so the bytes past it
+    // cannot expose what an earlier encoding held.
+    it("returns buffers holding nothing else", async () => {
+      const secret = new Uint8Array(1000).fill(0x5a);
+      await cbor.encode(cbor.bytes.value(secret));
+
+      const bytes = await cbor.encode(cbor.bytes.value(new Uint8Array(150)));
+      expect(bytes.buffer.byteLength).toBe(bytes.byteLength);
+    });
+
+    // Tests that decoded byte strings own their memory, even from an input
+    // whose slice() hands out views the way a Node Buffer does.
+    it("decodes byte strings into copies", async () => {
+      class ViewSlicing extends Uint8Array {
+        slice(start?: number, end?: number) {
+          return this.subarray(
+            start,
+            end,
+          ) as unknown as Uint8Array<ArrayBuffer>;
+        }
+      }
+      const input = new ViewSlicing([0x43, 0x01, 0x02, 0x03]);
+      const decoded = await cbor.decode(cbor.bytes.bytes(input));
+      input.fill(0);
+      expect(toHex(decoded)).toBe("010203");
+    });
+  });
+
+  describe("text", () => {
+    it("keeps a leading byte order mark when decoding", async () => {
+      // A text string holding U+FEFF followed by "admin"
+      const bom = new Uint8Array([
+        0x68, 0xef, 0xbb, 0xbf, 0x61, 0x64, 0x6d, 0x69, 0x6e,
+      ]);
+      expect(await cbor.decode(cbor.text.bytes(bom))).toBe("\uFEFFadmin");
+      expect(await roundtrip(cbor.text, "\uFEFF")).toBe("\uFEFF");
+    });
+
+    it("refuses strings with a lone surrogate", async () => {
+      for (const text of ["\uD800", "\uDC00", "a\uDC00\uD800b", "\uD800x"]) {
+        const id = JSON.stringify(text);
+        await expect(cbor.encode(cbor.text.value(text)), id).rejects.toThrow(
+          /lone surrogate/,
+        );
+        await expect(cbor.encode(cbor.raw.value([text])), id).rejects.toThrow(
+          /lone surrogate/,
+        );
+      }
+      expect(await roundtrip(cbor.text, "😀")).toBe("😀");
+    });
   });
 });

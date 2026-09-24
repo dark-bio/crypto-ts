@@ -10,6 +10,7 @@
 
 use darkbio_crypto::xdsa;
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroizing;
 
 /// Size of the secret key in bytes.
 #[wasm_bindgen]
@@ -50,31 +51,40 @@ impl XdsaSecretKey {
         }
     }
 
-    /// Creates a private key from a 64-byte seed.
-    pub fn from_bytes(bytes: &[u8]) -> Result<XdsaSecretKey, JsError> {
-        let seed: [u8; 64] = bytes
-            .try_into()
-            .map_err(|_| JsError::new("secret key must be 64 bytes"))?;
+    /// Creates a private key from a 64-byte seed, wiping the seed from WASM
+    /// memory before return.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<XdsaSecretKey, JsError> {
+        let bytes = Zeroizing::new(bytes);
+        let seed: Zeroizing<[u8; 64]> = Zeroizing::new(
+            bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| JsError::new("secret key must be 64 bytes"))?,
+        );
         Ok(Self {
             inner: xdsa::SecretKey::from_bytes(&seed),
         })
     }
 
-    /// Parses a secret key from PEM format.
-    pub fn from_pem(pem: &str) -> Result<XdsaSecretKey, JsError> {
+    /// Parses a secret key from PEM format, wiping the PEM from WASM memory
+    /// before return.
+    pub fn from_pem(pem: String) -> Result<XdsaSecretKey, JsError> {
+        let pem = Zeroizing::new(pem);
         Ok(Self {
-            inner: xdsa::SecretKey::from_pem(pem).map_err(|e| JsError::new(&e.to_string()))?,
+            inner: xdsa::SecretKey::from_pem(&pem).map_err(|e| JsError::new(&e.to_string()))?,
         })
     }
 
-    /// Serializes the secret key to a 64-byte seed.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.inner.to_bytes().to_vec()
+    /// Serializes the secret key to a 64-byte seed, copied straight into JS
+    /// memory so no unwiped copy is left in WASM memory.
+    pub fn to_bytes(&self) -> js_sys::Uint8Array {
+        js_sys::Uint8Array::from(&self.inner.to_bytes()[..])
     }
 
-    /// Serializes the secret key to PEM format.
-    pub fn to_pem(&self) -> String {
-        self.inner.to_pem().to_string()
+    /// Serializes the secret key to PEM format, copied straight into a JS
+    /// string so no unwiped copy is left in WASM memory.
+    pub fn to_pem(&self) -> js_sys::JsString {
+        js_sys::JsString::from(self.inner.to_pem().as_str())
     }
 
     /// Returns the public key corresponding to this private key.

@@ -135,7 +135,7 @@ export class Fingerprint {
 
   /** Converts a fingerprint into a 32-byte array. */
   toBytes(): Uint8Array {
-    return new Uint8Array(this._wasm.to_bytes());
+    return this._wasm.to_bytes();
   }
 
   /** Renders a fingerprint as lowercase hex. */
@@ -187,7 +187,7 @@ export class PublicKey {
 
   /** Converts a public key into a 1216-byte array. */
   toBytes(): Uint8Array {
-    return new Uint8Array(this._wasm.to_bytes());
+    return this._wasm.to_bytes();
   }
 
   /** Serializes a public key into a `PUBLIC KEY` PEM block with LF line endings. */
@@ -222,7 +222,7 @@ export class PublicKey {
    */
   newSender(domain: Uint8Array): { sender: Sender; encapKey: Uint8Array } {
     const wasmSender = this._wasm.new_sender(domain);
-    const encapKey = new Uint8Array(wasmSender.encap_key());
+    const encapKey = wasmSender.encap_key();
     return { sender: Sender._fromWasm(wasmSender), encapKey };
   }
 
@@ -244,7 +244,7 @@ export class PublicKey {
     msgToAuth: Uint8Array,
     domain: Uint8Array,
   ): Uint8Array {
-    return new Uint8Array(this._wasm.seal(msgToSeal, msgToAuth, domain));
+    return this._wasm.seal(msgToSeal, msgToAuth, domain);
   }
 }
 
@@ -291,7 +291,7 @@ export class SecretKey {
 
   /** Converts a secret key into its 32-byte seed. */
   toBytes(): Uint8Array {
-    return new Uint8Array(this._wasm.to_bytes());
+    return this._wasm.to_bytes();
   }
 
   /** Serializes a secret key into a `PRIVATE KEY` PEM block with LF line endings. */
@@ -348,7 +348,7 @@ export class SecretKey {
     msgToAuth: Uint8Array,
     domain: Uint8Array,
   ): Uint8Array {
-    return new Uint8Array(this._wasm.open(sealed, msgToAuth, domain));
+    return this._wasm.open(sealed, msgToAuth, domain);
   }
 }
 
@@ -378,7 +378,7 @@ export class Sender {
    * @returns The ciphertext
    */
   seal(msgToSeal: Uint8Array, msgToAuth: Uint8Array): Uint8Array {
-    return new Uint8Array(this.inner.seal(msgToSeal, msgToAuth));
+    return this.inner.seal(msgToSeal, msgToAuth);
   }
 }
 
@@ -409,7 +409,7 @@ export class Receiver {
    *   `msgToAuth` differs
    */
   open(msgToOpen: Uint8Array, msgToAuth: Uint8Array): Uint8Array {
-    return new Uint8Array(this.inner.open(msgToOpen, msgToAuth));
+    return this.inner.open(msgToOpen, msgToAuth);
   }
 }
 

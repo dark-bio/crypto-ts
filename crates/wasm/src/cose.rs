@@ -6,11 +6,12 @@
 
 //! COSE wrappers for xDSA and xHPKE.
 //!
-//! https://datatracker.ietf.org/doc/html/rfc8152
+//! https://datatracker.ietf.org/doc/html/rfc9052
 //! https://datatracker.ietf.org/doc/html/draft-ietf-cose-hpke
 
 use darkbio_crypto::{cbor, cose};
 use wasm_bindgen::prelude::*;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::xdsa::{XdsaFingerprint, XdsaPublicKey, XdsaSecretKey};
 use crate::xhpke::{XhpkeFingerprint, XhpkePublicKey, XhpkeSecretKey};
@@ -115,20 +116,38 @@ pub fn cose_recipient(ciphertext: &[u8]) -> Result<XhpkeFingerprint, JsError> {
     Ok(XhpkeFingerprint { inner: fp })
 }
 
-/// Signs a message then encrypts it to a recipient (sign-then-encrypt).
+/// Signs a message then encrypts it to a recipient (sign-then-encrypt). The
+/// binding's own copy of the plaintext is wiped before return; copies made
+/// inside crypto-rs are outside its reach.
 #[wasm_bindgen]
 pub fn cose_seal(
-    msg_to_seal: &[u8],
+    msg_to_seal: Vec<u8>,
     msg_to_auth: &[u8],
     signer: &XdsaSecretKey,
     recipient: &XhpkePublicKey,
     domain: &[u8],
 ) -> Result<Vec<u8>, JsError> {
-    cbor::verify(msg_to_seal).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
+    let mut plaintext = cbor::Raw(msg_to_seal);
+    let result = seal_raw(&plaintext, msg_to_auth, signer, recipient, domain);
+    plaintext.0.zeroize();
+    result
+}
+
+/// Validates and seals a plaintext the caller keeps ownership of, so it can
+/// wipe it afterwards on both success and failure.
+fn seal_raw(
+    plaintext: &cbor::Raw,
+    msg_to_auth: &[u8],
+    signer: &XdsaSecretKey,
+    recipient: &XhpkePublicKey,
+    domain: &[u8],
+) -> Result<Vec<u8>, JsError> {
+    cbor::verify(&plaintext.0)
+        .map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
 
     cose::seal(
-        cbor::Raw(msg_to_seal.to_vec()),
+        plaintext,
         cbor::Raw(msg_to_auth.to_vec()),
         &signer.inner,
         &recipient.inner,
@@ -137,7 +156,9 @@ pub fn cose_seal(
     .map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Decrypts and verifies a sealed message.
+/// Decrypts and verifies a sealed message. The plaintext is copied straight
+/// into JS memory and the binding's own copy is wiped; copies made inside
+/// crypto-rs are outside its reach.
 #[wasm_bindgen]
 pub fn cose_open(
     msg_to_open: &[u8],
@@ -146,7 +167,7 @@ pub fn cose_open(
     sender: &XdsaPublicKey,
     domain: &[u8],
     max_drift_secs: Option<u64>,
-) -> Result<Vec<u8>, JsError> {
+) -> Result<js_sys::Uint8Array, JsError> {
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
 
     let raw: cbor::Raw = cose::open(
@@ -158,22 +179,25 @@ pub fn cose_open(
         max_drift_secs,
     )
     .map_err(|e| JsError::new(&e.to_string()))?;
-    cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
-    Ok(raw.0)
+    let plaintext = Zeroizing::new(raw.0);
+    cbor::verify(&plaintext).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
+    Ok(js_sys::Uint8Array::from(&plaintext[..]))
 }
 
-/// Encrypts an already-signed COSE_Sign1 to a recipient.
+/// Encrypts an already-signed COSE_Sign1 to a recipient. The binding's own copy
+/// of the signed message is wiped before return.
 #[wasm_bindgen]
 pub fn cose_encrypt(
-    sign1: &[u8],
+    sign1: Vec<u8>,
     msg_to_auth: &[u8],
     recipient: &XhpkePublicKey,
     domain: &[u8],
 ) -> Result<Vec<u8>, JsError> {
+    let sign1 = Zeroizing::new(sign1);
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
 
     cose::encrypt(
-        sign1,
+        &sign1,
         cbor::Raw(msg_to_auth.to_vec()),
         &recipient.inner,
         domain,
@@ -181,21 +205,26 @@ pub fn cose_encrypt(
     .map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Decrypts a sealed message without verifying the signature.
+/// Decrypts a sealed message without verifying the signature. The decrypted
+/// COSE_Sign1 is copied straight into JS memory and the binding's own copy is
+/// wiped; copies made inside crypto-rs are outside its reach.
 #[wasm_bindgen]
 pub fn cose_decrypt(
     msg_to_open: &[u8],
     msg_to_auth: &[u8],
     recipient: &XhpkeSecretKey,
     domain: &[u8],
-) -> Result<Vec<u8>, JsError> {
+) -> Result<js_sys::Uint8Array, JsError> {
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
 
-    cose::decrypt(
-        msg_to_open,
-        cbor::Raw(msg_to_auth.to_vec()),
-        &recipient.inner,
-        domain,
-    )
-    .map_err(|e| JsError::new(&e.to_string()))
+    let sign1 = Zeroizing::new(
+        cose::decrypt(
+            msg_to_open,
+            cbor::Raw(msg_to_auth.to_vec()),
+            &recipient.inner,
+            domain,
+        )
+        .map_err(|e| JsError::new(&e.to_string()))?,
+    );
+    Ok(js_sys::Uint8Array::from(&sign1[..]))
 }

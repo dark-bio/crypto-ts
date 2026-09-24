@@ -24,6 +24,7 @@ import {
 import * as cose from "../src/cose.js";
 import * as xdsa from "../src/xdsa.js";
 import * as xhpke from "../src/xhpke.js";
+import cwtFixtures from "./testdata/cwt/v0.16.json";
 
 const domain = new TextEncoder().encode("test-domain");
 
@@ -57,6 +58,14 @@ describe("cwt", () => {
     return Array.from(bytes)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
+  }
+
+  function fromHex(hex: string): Uint8Array {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    }
+    return bytes;
   }
 
   describe("issue/verify", () => {
@@ -684,6 +693,85 @@ describe("cwt", () => {
         1500000,
       );
       expect(verified).toEqual(values);
+    });
+  });
+
+  // Tests that a subject reads back exactly as signed, since a dropped leading
+  // U+FEFF would present a token for another identity.
+  it("keeps a leading byte order mark in the subject", async () => {
+    const issuer = await xdsa.SecretKey.generate();
+    const Subject = cbor.map({
+      sub: claims.subject,
+      nbf: claims.notBefore,
+    });
+    const token = await issue(
+      Subject.value({ sub: "\uFEFFadmin", nbf: 1n }),
+      issuer,
+      domain,
+    );
+    const got = await verify(
+      Subject.bytes(token),
+      issuer.publicKey(),
+      domain,
+      1,
+    );
+    expect(got.sub).toBe("\uFEFFadmin");
+  });
+
+  // Tests that the v0.16 fixture corpus still validates, since that was in the
+  // first public release of the Ark, so we can't change the format anymore.
+  describe("v0.16 fixtures", () => {
+    // The claim set of the premature fixture token, which has no expiration.
+    const NoExp = cbor.map({
+      sub: claims.subject,
+      nbf: claims.notBefore,
+      cnf: claims.confirmXdsa,
+    });
+
+    it("verifies the committed tokens", async () => {
+      const issuer = await xdsa.SecretKey.fromBytes(
+        fromHex(cwtFixtures.xdsa_seed),
+      );
+      const fixtureDomain = fromHex(cwtFixtures.domain);
+      const now = cwtFixtures.now;
+
+      // Verify the committed valid token and check the decoded claims
+      const valid = fromHex(cwtFixtures.valid);
+      const got = await verify(
+        Basic.bytes(valid),
+        issuer.publicKey(),
+        fixtureDomain,
+        now,
+      );
+      expect(got.sub).toBe("fixture");
+      expect(got.exp).toBe(4102444800n);
+      expect(got.nbf).toBe(1500000000n);
+      expect(got.cnf.equals(issuer.publicKey())).toBe(true);
+
+      // The expired and premature tokens must keep failing temporally
+      await expect(
+        verify(
+          Basic.bytes(fromHex(cwtFixtures.expired)),
+          issuer.publicKey(),
+          fixtureDomain,
+          now,
+        ),
+      ).rejects.toThrow(/already expired/);
+      await expect(
+        verify(
+          NoExp.bytes(fromHex(cwtFixtures.premature)),
+          issuer.publicKey(),
+          fixtureDomain,
+          now,
+        ),
+      ).rejects.toThrow(/not yet valid/);
+
+      // A tampered token must fail the signature check
+      const tampered = valid.slice();
+      tampered[tampered.length - 1] ^= 1;
+      await expect(
+        verify(Basic.bytes(tampered), issuer.publicKey(), fixtureDomain, now),
+      ).rejects.toThrow();
     });
   });
 });
