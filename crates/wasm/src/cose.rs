@@ -94,19 +94,25 @@ pub fn cose_verify_detached(
     .map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// Extracts the signer's fingerprint from a COSE_Sign1 without verifying.
+/// Extracts the signer's fingerprint from a COSE_Sign1 without verifying. The
+/// binding's own copy of the signed message is wiped before return.
 #[wasm_bindgen]
-pub fn cose_signer(signature: &[u8]) -> Result<XdsaFingerprint, JsError> {
-    let fp = cose::signer(signature).map_err(|e| JsError::new(&e.to_string()))?;
+pub fn cose_signer(signature: Vec<u8>) -> Result<XdsaFingerprint, JsError> {
+    let signature = Zeroizing::new(signature);
+    let fp = cose::signer(&signature).map_err(|e| JsError::new(&e.to_string()))?;
     Ok(XdsaFingerprint { inner: fp })
 }
 
-/// Extracts the embedded payload from a COSE_Sign1 without verifying.
+/// Extracts the embedded payload from a COSE_Sign1 without verifying. The
+/// payload is copied straight into JS memory and the binding's own copies are
+/// wiped; copies made inside crypto-rs are outside its reach.
 #[wasm_bindgen]
-pub fn cose_peek(signature: &[u8]) -> Result<Vec<u8>, JsError> {
-    let raw: cbor::Raw = cose::peek(signature).map_err(|e| JsError::new(&e.to_string()))?;
-    cbor::verify(&raw.0).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
-    Ok(raw.0)
+pub fn cose_peek(signature: Vec<u8>) -> Result<js_sys::Uint8Array, JsError> {
+    let signature = Zeroizing::new(signature);
+    let raw: cbor::Raw = cose::peek(&signature).map_err(|e| JsError::new(&e.to_string()))?;
+    let payload = Zeroizing::new(raw.0);
+    cbor::verify(&payload).map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
+    Ok(js_sys::Uint8Array::from(&payload[..]))
 }
 
 /// Extracts the recipient's fingerprint from a COSE_Encrypt0 without decrypting.
