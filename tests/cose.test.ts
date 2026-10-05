@@ -273,6 +273,7 @@ describe("cose", () => {
         signerSk,
         recipientSk.publicKey(),
         domain,
+        { name: "none" },
       );
       const opened = await open(
         Message.bytes(sealed),
@@ -295,6 +296,7 @@ describe("cose", () => {
         signerSk,
         recipientSk1.publicKey(),
         domain,
+        { name: "none" },
       );
       await expect(
         open(
@@ -318,6 +320,7 @@ describe("cose", () => {
         signerSk1,
         recipientSk.publicKey(),
         domain,
+        { name: "none" },
       );
       await expect(
         open(
@@ -347,6 +350,7 @@ describe("cose", () => {
         Nothing.value(null),
         recipientSk.publicKey(),
         domain,
+        { name: "none" },
       );
       const decrypted = await decrypt(
         encrypted,
@@ -378,6 +382,7 @@ describe("cose", () => {
         Nothing.value(null),
         recipientSk.publicKey(),
         domain,
+        { name: "none" },
       );
       const fp = await recipient(encrypted);
       expect(fp.toBytes().length).toBe(32);
@@ -520,7 +525,7 @@ describe("cose", () => {
         ],
         [
           "sealed",
-          () => seal(msg, auth, sk, rk.publicKey(), domain),
+          () => seal(msg, auth, sk, rk.publicKey(), domain, { name: "none" }),
           (data) =>
             open(Message.bytes(data), auth, rk, sk.publicKey(), domain, 60),
         ],

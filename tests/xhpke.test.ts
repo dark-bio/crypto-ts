@@ -428,6 +428,7 @@ describe("xhpke", () => {
       signer,
       sk.publicKey(),
       domain,
+      { name: "none" },
     );
 
     sk.dispose();

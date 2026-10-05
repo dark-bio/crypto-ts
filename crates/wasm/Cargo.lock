@@ -181,9 +181,9 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto"
-version = "0.19.3"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2582a69fd804d95f6ece2740db3ea2f9f9a9e29e1ef1f3f9be5ca7ab6747fe0"
+checksum = "69d370feb9925a3329d27d89c44745516a2ab973e4165293239497ce56435df9"
 dependencies = [
  "argon2",
  "base64",
@@ -207,9 +207,9 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto-cbor-derive"
-version = "0.19.3"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad24955999fe057b7caff7f9d4e085f67ca39efd79a6eb7d9a8e54ebf52a1488"
+checksum = "02a6716d39b55622611e171aba5896436e31ed2cf9972df2c7522834a209cff7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto-wasm"
-version = "0.19.3"
+version = "0.20.0"
 dependencies = [
  "darkbio-crypto",
  "js-sys",
@@ -426,9 +426,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "ml-dsa"
@@ -840,9 +840,9 @@ dependencies = [
 
 [[package]]
 name = "x-wing"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b51507b887016c3925c84591108dadb8c099f776eb04fec6a60ae3519fee856f"
+checksum = "01576e56599d01d75c5efcd5b30fa5de29e776f5a225e43fbf8c92c7302d4c8b"
 dependencies = [
  "kem",
  "ml-kem",

@@ -122,41 +122,40 @@ pub fn cose_recipient(ciphertext: &[u8]) -> Result<XhpkeFingerprint, JsError> {
     Ok(XhpkeFingerprint { inner: fp })
 }
 
-/// Signs a message then encrypts it to a recipient (sign-then-encrypt). The
-/// binding's own copy of the plaintext is wiped before return; copies made
-/// inside crypto-rs are outside its reach.
+/// Signs a plaintext for sealing, so TypeScript can validate its padded size
+/// before encryption. The binding's plaintext and signature copies are wiped;
+/// copies made inside crypto-rs are outside its reach.
 #[wasm_bindgen]
-pub fn cose_seal(
+pub fn cose_prepare_seal(
     msg_to_seal: Vec<u8>,
     msg_to_auth: &[u8],
     signer: &XdsaSecretKey,
-    recipient: &XhpkePublicKey,
     domain: &[u8],
-) -> Result<Vec<u8>, JsError> {
+) -> Result<js_sys::Uint8Array, JsError> {
+    // Wipe the input on both success and failure, then guard the signed copy
     let mut plaintext = cbor::Raw(msg_to_seal);
-    let result = seal_raw(&plaintext, msg_to_auth, signer, recipient, domain);
+    let result = sign_for_seal(&plaintext, msg_to_auth, signer, domain);
     plaintext.0.zeroize();
-    result
+    let sign1 = Zeroizing::new(result?);
+    Ok(js_sys::Uint8Array::from(&sign1[..]))
 }
 
-/// Validates and seals a plaintext the caller keeps ownership of, so it can
-/// wipe it afterwards on both success and failure.
-fn seal_raw(
+/// Validates and signs a borrowed plaintext that the caller wipes afterwards.
+fn sign_for_seal(
     plaintext: &cbor::Raw,
     msg_to_auth: &[u8],
     signer: &XdsaSecretKey,
-    recipient: &XhpkePublicKey,
     domain: &[u8],
 ) -> Result<Vec<u8>, JsError> {
+    // Validate both messages before producing the signature
     cbor::verify(&plaintext.0)
         .map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
 
-    cose::seal(
+    cose::sign(
         plaintext,
         cbor::Raw(msg_to_auth.to_vec()),
         &signer.inner,
-        &recipient.inner,
         domain,
     )
     .map_err(|e| JsError::new(&e.to_string()))
@@ -190,23 +189,37 @@ pub fn cose_open(
     Ok(js_sys::Uint8Array::from(&plaintext[..]))
 }
 
-/// Encrypts an already-signed COSE_Sign1 to a recipient. The binding's own copy
-/// of the signed message is wiped before return.
+/// Encrypts a COSE_Sign1 to a recipient using the padded size validated by
+/// TypeScript. The binding's copy of the signed message is wiped before return.
 #[wasm_bindgen]
 pub fn cose_encrypt(
     sign1: Vec<u8>,
     msg_to_auth: &[u8],
     recipient: &XhpkePublicKey,
     domain: &[u8],
+    padded_len: usize,
 ) -> Result<Vec<u8>, JsError> {
     let sign1 = Zeroizing::new(sign1);
+    if padded_len < sign1.len() || padded_len > i32::MAX as usize - 4096 {
+        return Err(JsError::new("invalid padded plaintext size"));
+    }
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
 
+    // The first bucket already fits, so Rust never repeats the size calculation
+    let padding = if padded_len == sign1.len() {
+        cose::Padding::None
+    } else {
+        cose::Padding::Buckets {
+            floor: padded_len,
+            step: 1,
+        }
+    };
     cose::encrypt(
         &sign1,
         cbor::Raw(msg_to_auth.to_vec()),
         &recipient.inner,
         domain,
+        &padding,
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }

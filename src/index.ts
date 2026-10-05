@@ -13,6 +13,8 @@
  * authenticated messages are bound to a `cbor` codec, which declares their
  * shape. The WASM module loads on the first call of any async function, so
  * there is no separate setup step.
+ * COSE sealing and encryption take a sender padding policy. Opening strips
+ * zero padding without needing that policy.
  *
  * @module
  */
