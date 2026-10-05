@@ -65,6 +65,12 @@ const sealed = await cose.seal(cbor.text.value("payload"), metadata, signer, rec
 const opened = await cose.open(cbor.text.bytes(sealed), metadata, recipient, signer.publicKey(), domain, 60);
 ```
 
+`cose.seal` and `cose.encrypt` take a `cose.Padding` policy after the domain. `{ name: "none" }` adds no padding. Buckets pad the signed envelope with zeros inside the encryption, to the smallest of a series of sizes that starts at `floor` bytes and grows by `1/step` of each, rounded up. The example's first sizes are 8,192, 8,602 and 9,033 bytes.
+
+Both bucket parameters must be integers from 1 to 4,294,967,295, and the padded envelope must fit wasm's allocation limit. TypeScript rejects anything else before it enters WASM, where a panic would trap the shared instance.
+
+`cose.open` and `cose.decrypt` need no policy. They strip any number of zero bytes after the signed envelope and refuse a nonzero byte.
+
 ## Native packages
 
 The underlying implementation exists in two sibling repos, which track the same feature set and API surfaces, released at corresponding version points.
