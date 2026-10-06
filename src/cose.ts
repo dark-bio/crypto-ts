@@ -48,6 +48,12 @@
  *   `msgToAuth`, and the complete encoded Enc_structure is the HPKE AAD. HPKE
  *   key derivation uses `"dark-bio-v1:" || domain` as its info. The X-Wing
  *   encapsulated key is carried in unprotected header -4.
+ * - The encryption plaintext is the encoded COSE_Sign1 followed by zero bytes,
+ *   as many as the sender's {@link Padding} policy picks. The signature does
+ *   not cover them, while the encryption authenticates them. A receiver finds
+ *   the end of the COSE_Sign1 by decoding it and refuses a nonzero byte after
+ *   it. It accepts any number of zeros, none included, so a sender can change
+ *   its policy without its receivers.
  *
  * Here bstr denotes a CBOR byte string and || denotes byte concatenation. The
  * domain and `msgToAuth` are not included in the returned envelope, so both
@@ -68,7 +74,8 @@
  *
  * // Sign and encrypt to a recipient in one step, then open and verify it back
  * const recipient = await xhpke.SecretKey.generate();
- * const sealed = await cose.seal(cbor.text.value("secret"), context, signer, recipient.publicKey(), domain);
+ * const padding = cose.Padding.buckets({ floor: 8192, step: 20 });
+ * const sealed = await cose.seal(cbor.text.value("secret"), context, signer, recipient.publicKey(), domain, padding);
  * const opened = await cose.open(cbor.text.bytes(sealed), context, recipient, signer.publicKey(), domain, 60);
  * console.log(opened); // secret
  * ```
@@ -79,6 +86,7 @@
 import type { Decodable, Encodable } from "./cbor.js";
 import { parse, serialize } from "./internal/cborg.js";
 import {
+  CosePadding as WasmPadding,
   cose_sign,
   cose_sign_detached,
   cose_verify,
@@ -92,7 +100,7 @@ import {
   cose_decrypt,
 } from "./wasm/darkbio_crypto_wasm.js";
 import { ensureInit } from "./internal/init.js";
-import { U64_MAX } from "./internal/limits.js";
+import { U32_MAX, U64_MAX } from "./internal/limits.js";
 import {
   SecretKey as XdsaSecretKey,
   PublicKey as XdsaPublicKey,
@@ -103,6 +111,46 @@ import {
   PublicKey as XhpkePublicKey,
   Fingerprint as XhpkeFingerprint,
 } from "./xhpke.js";
+
+/**
+ * How many zero bytes a sender appends to the signed envelope inside the
+ * encryption, so the ciphertext's length shows little about the message.
+ *
+ * Receivers strip any number of zeros, so the policy is the sender's alone and
+ * can change without them.
+ */
+export class Padding {
+  private constructor(private readonly build: () => WasmPadding) {}
+
+  /** @internal */
+  _toWasm(): WasmPadding {
+    return this.build();
+  }
+
+  /** No padding: the plaintext is the signed envelope alone. */
+  static none(): Padding {
+    return new Padding(() => WasmPadding.none());
+  }
+
+  /**
+   * Zeros after the signed envelope, up to the smallest size that fits. Sizes
+   * start at `floor`, and each next one is the previous one plus `1/step` of
+   * it, rounded up.
+   *
+   * @throws If `floor` or `step` is not an integer from 1 to 4,294,967,295
+   */
+  static buckets({ floor, step }: { floor: number; step: number }): Padding {
+    for (const [name, value] of [
+      ["floor", floor],
+      ["step", step],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value < 1 || value > U32_MAX) {
+        throw new Error(`padding ${name} must be a positive 32 bit integer`);
+      }
+    }
+    return new Padding(() => WasmPadding.buckets(floor, step));
+  }
+}
 
 /**
  * Converts the drift bound of a verification for the WASM boundary.
@@ -310,10 +358,12 @@ export async function recipient(
  * @param signerKey - The xDSA secret key to sign with
  * @param recipientKey - The xHPKE public key to encrypt to
  * @param domain - Application domain for HPKE key derivation
+ * @param padding - Sender's policy for zeros after the signed envelope
  * @returns The serialized COSE_Encrypt0 envelope holding the encrypted
  *   COSE_Sign1
  * @throws CodecError if a message does not fit its codec
  * @throws If a message falls outside the restricted CBOR type system
+ * @throws If `padding` is not a {@link Padding}
  */
 export async function seal<S, A>(
   msgToSeal: Encodable<S>,
@@ -321,19 +371,28 @@ export async function seal<S, A>(
   signerKey: XdsaSecretKey,
   recipientKey: XhpkePublicKey,
   domain: Uint8Array,
+  padding: Padding,
 ): Promise<Uint8Array> {
+  // Plain JavaScript callers can pass any value as the policy
+  if (!(padding instanceof Padding)) {
+    throw new Error("padding must be a Padding instance");
+  }
   await ensureInit();
-  const plaintext = serialize(msgToSeal);
+  const wasmPadding = padding._toWasm();
+  let plaintext: Uint8Array | undefined;
   try {
+    plaintext = serialize(msgToSeal);
     return cose_seal(
       plaintext,
       serialize(msgToAuth),
       signerKey._wasm,
       recipientKey._wasm,
       domain,
+      wasmPadding,
     );
   } finally {
-    plaintext.fill(0);
+    plaintext?.fill(0);
+    wasmPadding.free();
   }
 }
 
@@ -393,17 +452,34 @@ export async function open<T, A>(
  * @param msgToAuth - The same additional authenticated data used during sealing
  * @param recipientKey - The xHPKE public key to encrypt to
  * @param domain - Application domain for HPKE key derivation
+ * @param padding - Sender's policy for zeros after the signed envelope
  * @returns The serialized COSE_Encrypt0 envelope
  * @throws CodecError if `msgToAuth` does not fit its codec
+ * @throws If `padding` is not a {@link Padding}
  */
 export async function encrypt<A>(
   sign1: Uint8Array,
   msgToAuth: Encodable<A>,
   recipientKey: XhpkePublicKey,
   domain: Uint8Array,
+  padding: Padding,
 ): Promise<Uint8Array> {
+  if (!(padding instanceof Padding)) {
+    throw new Error("padding must be a Padding instance");
+  }
   await ensureInit();
-  return cose_encrypt(sign1, serialize(msgToAuth), recipientKey._wasm, domain);
+  const wasmPadding = padding._toWasm();
+  try {
+    return cose_encrypt(
+      sign1,
+      serialize(msgToAuth),
+      recipientKey._wasm,
+      domain,
+      wasmPadding,
+    );
+  } finally {
+    wasmPadding.free();
+  }
 }
 
 /**
@@ -413,13 +489,16 @@ export async function encrypt<A>(
  * to extract the signer's fingerprint, then {@link verify} with the same
  * `msgToAuth` and `domain` to verify.
  *
+ * It strips the zero bytes after the COSE_Sign1, accepting any number of them,
+ * and returns the COSE_Sign1 as encoded.
+ *
  * @param msgToOpen - The serialized COSE_Encrypt0 envelope
  * @param msgToAuth - The same additional authenticated data used during sealing
  * @param recipientKey - The xHPKE secret key to decrypt with
  * @param domain - Application domain for HPKE key derivation
  * @returns The decrypted COSE_Sign1 envelope, not yet verified
  * @throws If the envelope is malformed or does not decrypt for this key,
- *   `msgToAuth` and `domain`
+ *   `msgToAuth` and `domain`, or a nonzero byte follows the COSE_Sign1
  * @throws CodecError if `msgToAuth` does not fit its codec
  */
 export async function decrypt<A>(

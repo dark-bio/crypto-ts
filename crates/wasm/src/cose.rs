@@ -16,6 +16,31 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::xdsa::{XdsaFingerprint, XdsaPublicKey, XdsaSecretKey};
 use crate::xhpke::{XhpkeFingerprint, XhpkePublicKey, XhpkeSecretKey};
 
+/// Opaque padding policy for a single sealing call.
+#[wasm_bindgen]
+pub struct CosePadding {
+    inner: cose::Padding,
+}
+
+#[wasm_bindgen]
+impl CosePadding {
+    /// Creates a policy that adds no padding.
+    pub fn none() -> Self {
+        Self {
+            inner: cose::Padding::None,
+        }
+    }
+
+    /// Creates a policy that pads to the smallest size that fits. Sizes start at
+    /// `floor`, and each next one is the previous one plus `1/step` of it,
+    /// rounded up.
+    pub fn buckets(floor: usize, step: usize) -> Self {
+        Self {
+            inner: cose::Padding::Buckets { floor, step },
+        }
+    }
+}
+
 /// Creates a COSE_Sign1 signature with an embedded payload.
 #[wasm_bindgen]
 pub fn cose_sign(
@@ -132,9 +157,10 @@ pub fn cose_seal(
     signer: &XdsaSecretKey,
     recipient: &XhpkePublicKey,
     domain: &[u8],
+    padding: &CosePadding,
 ) -> Result<Vec<u8>, JsError> {
     let mut plaintext = cbor::Raw(msg_to_seal);
-    let result = seal_raw(&plaintext, msg_to_auth, signer, recipient, domain);
+    let result = seal_raw(&plaintext, msg_to_auth, signer, recipient, domain, padding);
     plaintext.0.zeroize();
     result
 }
@@ -147,6 +173,7 @@ fn seal_raw(
     signer: &XdsaSecretKey,
     recipient: &XhpkePublicKey,
     domain: &[u8],
+    padding: &CosePadding,
 ) -> Result<Vec<u8>, JsError> {
     cbor::verify(&plaintext.0)
         .map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
@@ -158,6 +185,7 @@ fn seal_raw(
         &signer.inner,
         &recipient.inner,
         domain,
+        &padding.inner,
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }
@@ -198,6 +226,7 @@ pub fn cose_encrypt(
     msg_to_auth: &[u8],
     recipient: &XhpkePublicKey,
     domain: &[u8],
+    padding: &CosePadding,
 ) -> Result<Vec<u8>, JsError> {
     let sign1 = Zeroizing::new(sign1);
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
@@ -207,6 +236,7 @@ pub fn cose_encrypt(
         cbor::Raw(msg_to_auth.to_vec()),
         &recipient.inner,
         domain,
+        &padding.inner,
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }
