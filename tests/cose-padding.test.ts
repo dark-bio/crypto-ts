@@ -9,8 +9,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decode, encode } from "cborg";
 import { cbor, cose, xdsa, xhpke } from "../src/index.js";
-import { paddedSize } from "../src/internal/padding.js";
-import { cose_encrypt as wasmEncrypt } from "../src/wasm/darkbio_crypto_wasm.js";
+import { CosePadding as WasmPadding } from "../src/wasm/darkbio_crypto_wasm.js";
 import fixtures from "./testdata/cose/v0.16.json";
 import padded from "./testdata/cose/padded.json";
 
@@ -98,11 +97,9 @@ describe("COSE padding", () => {
       [1, 3, 101, 115],
     );
 
-    // Check both the TS calculation and the actual encrypted plaintext
     for (const [floor, step, length, expected] of cases) {
-      const padding: cose.Padding = { name: "buckets", floor, step };
+      const padding = cose.Padding.buckets({ floor, step });
       const id = `${floor}/${step}/${length}`;
-      expect(paddedSize(length, padding), id).toBe(expected);
       const input = new Uint8Array(length).fill(0x42);
       const envelope = await cose.encrypt(
         input,
@@ -120,34 +117,6 @@ describe("COSE padding", () => {
     }
   });
 
-  // Large arithmetic boundaries are checked without allocating their buffers.
-  it("preserves unpadded sizes and handles ceiling division at the wasm32 limit", () => {
-    for (const length of [0, 1, 8192, 8193, 300000, 4294967295]) {
-      expect(paddedSize(length, { name: "none" }), `${length}`).toBe(length);
-    }
-    expect(
-      paddedSize(4294967295, {
-        name: "buckets",
-        floor: 4294967294,
-        step: 4294967295,
-      }),
-    ).toBe(4294967295);
-    expect(
-      paddedSize(4294967295, {
-        name: "buckets",
-        floor: 1,
-        step: 4294967295,
-      }),
-    ).toBe(4294967295);
-    expect(() =>
-      paddedSize(4294967295, {
-        name: "buckets",
-        floor: 4294967294,
-        step: 1,
-      }),
-    ).toThrow(/bucket size/);
-  });
-
   // Pin the raw plaintext, stripping and verification against the v0.16 corpus.
   it("seals and encrypts the exact padded and unpadded signed envelope", async () => {
     const signer = await xdsa.SecretKey.fromBytes(fromHex(fixtures.xdsa_seed));
@@ -160,9 +129,9 @@ describe("COSE padding", () => {
     const domain = fromHex(fixtures.domain);
     vi.spyOn(Date, "now").mockReturnValue(1700000000000);
 
-    for (const [padding, length, zeros] of [
-      [{ name: "none" }, 3461, 0],
-      [{ name: "buckets", floor: 8192, step: 20 }, 8192, 4731],
+    for (const [name, padding, length, zeros] of [
+      ["none", cose.Padding.none(), 3461, 0],
+      ["buckets", cose.Padding.buckets({ floor: 8192, step: 20 }), 8192, 4731],
     ] as const) {
       const envelopes = [
         await cose.seal(
@@ -183,11 +152,9 @@ describe("COSE padding", () => {
       ];
       for (const envelope of envelopes) {
         const plaintext = openPlaintext(envelope, aad, recipient, domain);
-        expect(plaintext.length, padding.name).toBe(length);
-        expect(plaintext.slice(0, 3461), padding.name).toEqual(sign1);
-        expect(plaintext.slice(3461), padding.name).toEqual(
-          new Uint8Array(zeros),
-        );
+        expect(plaintext.length, name).toBe(length);
+        expect(plaintext.slice(0, 3461), name).toEqual(sign1);
+        expect(plaintext.slice(3461), name).toEqual(new Uint8Array(zeros));
         expect(
           await cose.decrypt(
             envelope,
@@ -240,20 +207,7 @@ describe("COSE padding", () => {
     ).toEqual(fromHex(padded.payload));
   });
 
-  // Each rejected policy is followed by a successful seal on the same instance.
-  it("rejects every invalid policy without trapping the shared instance", async () => {
-    const signer = await xdsa.SecretKey.generate();
-    const recipient = await xhpke.SecretKey.generate();
-    const domain = new Uint8Array();
-    const msg = cbor.text.value("still usable");
-    const aad = cbor.nil.value(null);
-    const sign1 = await cose.sign(msg, aad, signer, domain);
-    const cases: [string, unknown][] = [
-      ["name", { name: "unknown" }],
-      ["name", {}],
-      ["name", null],
-      ["name", undefined],
-    ];
+  it("rejects invalid bucket parameters when constructing the policy", () => {
     for (const field of ["floor", "step"]) {
       for (const value of [
         0,
@@ -263,24 +217,39 @@ describe("COSE padding", () => {
         Infinity,
         -Infinity,
         4294967296,
+        4294967301,
         Number.MAX_SAFE_INTEGER + 1,
         undefined,
         null,
         "1",
         1n,
       ]) {
-        cases.push([
-          field,
-          { name: "buckets", floor: 8192, step: 20, [field]: value },
-        ]);
+        expect(
+          () =>
+            cose.Padding.buckets({
+              floor: 8192,
+              step: 20,
+              [field]: value as number,
+            }),
+          `${field}/${String(value)}`,
+        ).toThrow(`padding ${field} must be a positive 32 bit integer`);
       }
     }
-    cases.push([
-      "allocation limit",
-      { name: "buckets", floor: 2147483648, step: 20 },
-    ]);
+  });
 
-    for (const [field, value] of cases) {
+  it("rejects non-instance padding in seal and encrypt", async () => {
+    const signer = await xdsa.SecretKey.generate();
+    const recipient = await xhpke.SecretKey.generate();
+    const domain = new Uint8Array();
+    const msg = cbor.text.value("padding");
+    const aad = cbor.nil.value(null);
+    const sign1 = await cose.sign(msg, aad, signer, domain);
+    const cases: [string, unknown][] = [
+      ["buckets object", { name: "buckets", floor: 8192, step: 20 }],
+      ["undefined", undefined],
+    ];
+
+    for (const [name, value] of cases) {
       const padding = value as cose.Padding;
       const operations = [
         () =>
@@ -288,117 +257,105 @@ describe("COSE padding", () => {
         () => cose.encrypt(sign1, aad, recipient.publicKey(), domain, padding),
       ];
       for (const operation of operations) {
-        const error = await operation().catch((error: unknown) => error);
-        expect(error, field).toBeInstanceOf(Error);
-        expect(error, field).not.toBeInstanceOf(WebAssembly.RuntimeError);
-        expect((error as Error).message, field).toContain(field);
-        const recovered = await cose.seal(
-          msg,
-          aad,
-          signer,
-          recipient.publicKey(),
-          domain,
-          { name: "none" },
+        await expect(operation(), name).rejects.toThrow(
+          "padding must be a Padding instance",
         );
-        expect(
-          await cose.open(
-            cbor.text.bytes(recovered),
-            aad,
-            recipient,
-            signer.publicKey(),
-            domain,
-          ),
-        ).toBe("still usable");
       }
     }
   });
 
-  it("reserves encryption overhead and remains usable after boundary rejections", async () => {
+  it("frees each temporary WASM policy after success and failure", async () => {
     const signer = await xdsa.SecretKey.generate();
     const recipient = await xhpke.SecretKey.generate();
     const recipientKey = recipient.publicKey();
     const domain = new Uint8Array();
-    const msg = cbor.text.value("still usable");
+    const msg = cbor.text.value("reusable policy");
     const aad = cbor.nil.value(null);
-    const encodedAad = await cbor.encode(aad);
     const sign1 = await cose.sign(msg, aad, signer, domain);
+    const invalidCodec = cbor.text.value(1 as unknown as string);
+    const invalidCbor = cbor.raw.value(1.5);
+    const free = vi.spyOn(WasmPadding.prototype, "free");
 
-    for (const size of [2147479552, 2147483647]) {
-      const padding: cose.Padding = { name: "buckets", floor: size, step: 1 };
-      const operations = [
-        () => cose.seal(msg, aad, signer, recipientKey, domain, padding),
-        () => cose.encrypt(sign1, aad, recipientKey, domain, padding),
-        () => wasmEncrypt(sign1, encodedAad, recipientKey._wasm, domain, size),
+    for (const padding of [
+      cose.Padding.none(),
+      cose.Padding.buckets({ floor: 8192, step: 20 }),
+    ]) {
+      const operations: [string, () => Promise<Uint8Array>, RegExp?][] = [
+        [
+          "seal",
+          () => cose.seal(msg, aad, signer, recipientKey, domain, padding),
+        ],
+        [
+          "encrypt",
+          () => cose.encrypt(sign1, aad, recipientKey, domain, padding),
+        ],
+        [
+          "payload codec",
+          () =>
+            cose.seal(invalidCodec, aad, signer, recipientKey, domain, padding),
+          /not text/,
+        ],
+        [
+          "seal AAD codec",
+          () =>
+            cose.seal(msg, invalidCodec, signer, recipientKey, domain, padding),
+          /not text/,
+        ],
+        [
+          "encrypt AAD codec",
+          () =>
+            cose.encrypt(sign1, invalidCodec, recipientKey, domain, padding),
+          /not text/,
+        ],
+        [
+          "payload CBOR",
+          () =>
+            cose.seal(invalidCbor, aad, signer, recipientKey, domain, padding),
+          /invalid payload CBOR/,
+        ],
+        [
+          "seal AAD CBOR",
+          () =>
+            cose.seal(msg, invalidCbor, signer, recipientKey, domain, padding),
+          /invalid AAD CBOR/,
+        ],
+        [
+          "encrypt AAD CBOR",
+          () => cose.encrypt(sign1, invalidCbor, recipientKey, domain, padding),
+          /invalid AAD CBOR/,
+        ],
+        [
+          "seal again",
+          () => cose.seal(msg, aad, signer, recipientKey, domain, padding),
+        ],
+        [
+          "encrypt again",
+          () => cose.encrypt(sign1, aad, recipientKey, domain, padding),
+        ],
       ];
-      for (const operation of operations) {
-        const error = await Promise.resolve()
-          .then(operation)
-          .catch((error: unknown) => error);
-        expect(error, `${size}`).toBeInstanceOf(Error);
-        expect(error, `${size}`).not.toBeInstanceOf(WebAssembly.RuntimeError);
-        expect((error as Error).message, `${size}`).toContain(
-          "padded plaintext",
-        );
-
-        const sealed = await cose.seal(msg, aad, signer, recipientKey, domain, {
-          name: "none",
-        });
-        expect(
-          await cose.open(
-            cbor.text.bytes(sealed),
-            aad,
-            recipient,
-            signer.publicKey(),
-            domain,
-          ),
-        ).toBe("still usable");
+      const freed = new Set<WasmPadding>();
+      for (const [name, operation, error] of operations) {
+        free.mockClear();
+        if (error) {
+          await expect(operation(), name).rejects.toThrow(error);
+        } else {
+          const envelope = await operation();
+          expect(
+            await cose.open(
+              cbor.text.bytes(envelope),
+              aad,
+              recipient,
+              signer.publicKey(),
+              domain,
+            ),
+            name,
+          ).toBe("reusable policy");
+        }
+        expect(free, name).toHaveBeenCalledTimes(1);
+        const policy = free.mock.contexts[0];
+        expect(freed.has(policy), name).toBe(false);
+        freed.add(policy);
       }
-    }
-  });
-
-  // Model huge input lengths without allocating gigabytes or entering WASM.
-  it("rejects overflowing sizes before copying into WASM and remains usable", async () => {
-    const signer = await xdsa.SecretKey.generate();
-    const recipient = await xhpke.SecretKey.generate();
-    const domain = new Uint8Array();
-    const aad = cbor.nil.value(null);
-    for (const [length, padding, reason] of [
-      [
-        4294967295,
-        { name: "buckets", floor: 4294967294, step: 1 },
-        "bucket size",
-      ],
-      [4294967296, { name: "none" }, "signed envelope length"],
-      [2147483648, { name: "none" }, "allocation limit"],
-    ] as const) {
-      const oversized = new Proxy(new Uint8Array(), {
-        get(target, key) {
-          return key === "length" ? length : Reflect.get(target, key, target);
-        },
-      });
-      const error = await cose
-        .encrypt(oversized, aad, recipient.publicKey(), domain, padding)
-        .catch((error: unknown) => error);
-      expect(error, reason).toBeInstanceOf(Error);
-      expect(error, reason).not.toBeInstanceOf(WebAssembly.RuntimeError);
-      expect((error as Error).message, reason).toContain(reason);
-      const sealed = await cose.seal(
-        cbor.text.value("ok"),
-        aad,
-        signer,
-        recipient.publicKey(),
-        domain,
-        { name: "none" },
-      );
-      expect(
-        await cose.open(
-          cbor.text.bytes(sealed),
-          aad,
-          recipient,
-          signer.publicKey(),
-          domain,
-        ),
-      ).toBe("ok");
     }
   });
 

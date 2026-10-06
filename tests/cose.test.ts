@@ -9,6 +9,7 @@ import { decode as cborgDecode, encode as cborgEncode } from "cborg";
 import * as cbor from "../src/cbor.js";
 import { CodecError } from "../src/cbor.js";
 import {
+  Padding,
   sign,
   signDetached,
   verify,
@@ -273,7 +274,7 @@ describe("cose", () => {
         signerSk,
         recipientSk.publicKey(),
         domain,
-        { name: "none" },
+        Padding.none(),
       );
       const opened = await open(
         Message.bytes(sealed),
@@ -296,7 +297,7 @@ describe("cose", () => {
         signerSk,
         recipientSk1.publicKey(),
         domain,
-        { name: "none" },
+        Padding.none(),
       );
       await expect(
         open(
@@ -320,7 +321,7 @@ describe("cose", () => {
         signerSk1,
         recipientSk.publicKey(),
         domain,
-        { name: "none" },
+        Padding.none(),
       );
       await expect(
         open(
@@ -350,7 +351,7 @@ describe("cose", () => {
         Nothing.value(null),
         recipientSk.publicKey(),
         domain,
-        { name: "none" },
+        Padding.none(),
       );
       const decrypted = await decrypt(
         encrypted,
@@ -382,7 +383,7 @@ describe("cose", () => {
         Nothing.value(null),
         recipientSk.publicKey(),
         domain,
-        { name: "none" },
+        Padding.none(),
       );
       const fp = await recipient(encrypted);
       expect(fp.toBytes().length).toBe(32);
@@ -525,7 +526,7 @@ describe("cose", () => {
         ],
         [
           "sealed",
-          () => seal(msg, auth, sk, rk.publicKey(), domain, { name: "none" }),
+          () => seal(msg, auth, sk, rk.publicKey(), domain, Padding.none()),
           (data) =>
             open(Message.bytes(data), auth, rk, sk.publicKey(), domain, 60),
         ],

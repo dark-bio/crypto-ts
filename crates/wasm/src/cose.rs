@@ -16,6 +16,31 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::xdsa::{XdsaFingerprint, XdsaPublicKey, XdsaSecretKey};
 use crate::xhpke::{XhpkeFingerprint, XhpkePublicKey, XhpkeSecretKey};
 
+/// Opaque padding policy for a single sealing call.
+#[wasm_bindgen]
+pub struct CosePadding {
+    inner: cose::Padding,
+}
+
+#[wasm_bindgen]
+impl CosePadding {
+    /// Creates a policy that adds no padding.
+    pub fn none() -> Self {
+        Self {
+            inner: cose::Padding::None,
+        }
+    }
+
+    /// Creates a policy that pads to the smallest size that fits. Sizes start at
+    /// `floor`, and each next one is the previous one plus `1/step` of it,
+    /// rounded up.
+    pub fn buckets(floor: usize, step: usize) -> Self {
+        Self {
+            inner: cose::Padding::Buckets { floor, step },
+        }
+    }
+}
+
 /// Creates a COSE_Sign1 signature with an embedded payload.
 #[wasm_bindgen]
 pub fn cose_sign(
@@ -122,41 +147,45 @@ pub fn cose_recipient(ciphertext: &[u8]) -> Result<XhpkeFingerprint, JsError> {
     Ok(XhpkeFingerprint { inner: fp })
 }
 
-/// Signs a plaintext for sealing, so TypeScript can validate its padded size
-/// before encryption. The binding's plaintext and signature copies are wiped;
-/// copies made inside crypto-rs are outside its reach.
+/// Signs a message then encrypts it to a recipient (sign-then-encrypt). The
+/// binding's own copy of the plaintext is wiped before return; copies made
+/// inside crypto-rs are outside its reach.
 #[wasm_bindgen]
-pub fn cose_prepare_seal(
+pub fn cose_seal(
     msg_to_seal: Vec<u8>,
     msg_to_auth: &[u8],
     signer: &XdsaSecretKey,
+    recipient: &XhpkePublicKey,
     domain: &[u8],
-) -> Result<js_sys::Uint8Array, JsError> {
-    // Wipe the input on both success and failure, then guard the signed copy
+    padding: &CosePadding,
+) -> Result<Vec<u8>, JsError> {
     let mut plaintext = cbor::Raw(msg_to_seal);
-    let result = sign_for_seal(&plaintext, msg_to_auth, signer, domain);
+    let result = seal_raw(&plaintext, msg_to_auth, signer, recipient, domain, padding);
     plaintext.0.zeroize();
-    let sign1 = Zeroizing::new(result?);
-    Ok(js_sys::Uint8Array::from(&sign1[..]))
+    result
 }
 
-/// Validates and signs a borrowed plaintext that the caller wipes afterwards.
-fn sign_for_seal(
+/// Validates and seals a plaintext the caller keeps ownership of, so it can
+/// wipe it afterwards on both success and failure.
+fn seal_raw(
     plaintext: &cbor::Raw,
     msg_to_auth: &[u8],
     signer: &XdsaSecretKey,
+    recipient: &XhpkePublicKey,
     domain: &[u8],
+    padding: &CosePadding,
 ) -> Result<Vec<u8>, JsError> {
-    // Validate both messages before producing the signature
     cbor::verify(&plaintext.0)
         .map_err(|e| JsError::new(&format!("invalid payload CBOR: {}", e)))?;
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
 
-    cose::sign(
+    cose::seal(
         plaintext,
         cbor::Raw(msg_to_auth.to_vec()),
         &signer.inner,
+        &recipient.inner,
         domain,
+        &padding.inner,
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }
@@ -189,37 +218,25 @@ pub fn cose_open(
     Ok(js_sys::Uint8Array::from(&plaintext[..]))
 }
 
-/// Encrypts a COSE_Sign1 to a recipient using the padded size validated by
-/// TypeScript. The binding's copy of the signed message is wiped before return.
+/// Encrypts an already-signed COSE_Sign1 to a recipient. The binding's own copy
+/// of the signed message is wiped before return.
 #[wasm_bindgen]
 pub fn cose_encrypt(
     sign1: Vec<u8>,
     msg_to_auth: &[u8],
     recipient: &XhpkePublicKey,
     domain: &[u8],
-    padded_len: usize,
+    padding: &CosePadding,
 ) -> Result<Vec<u8>, JsError> {
     let sign1 = Zeroizing::new(sign1);
-    if padded_len < sign1.len() || padded_len > i32::MAX as usize - 4096 {
-        return Err(JsError::new("invalid padded plaintext size"));
-    }
     cbor::verify(msg_to_auth).map_err(|e| JsError::new(&format!("invalid AAD CBOR: {}", e)))?;
 
-    // The first bucket already fits, so Rust never repeats the size calculation
-    let padding = if padded_len == sign1.len() {
-        cose::Padding::None
-    } else {
-        cose::Padding::Buckets {
-            floor: padded_len,
-            step: 1,
-        }
-    };
     cose::encrypt(
         &sign1,
         cbor::Raw(msg_to_auth.to_vec()),
         &recipient.inner,
         domain,
-        &padding,
+        &padding.inner,
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }

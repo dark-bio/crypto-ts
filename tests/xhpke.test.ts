@@ -428,7 +428,7 @@ describe("xhpke", () => {
       signer,
       sk.publicKey(),
       domain,
-      { name: "none" },
+      cose.Padding.none(),
     );
 
     sk.dispose();

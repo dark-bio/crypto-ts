@@ -60,14 +60,14 @@ await cose.verifyDetached(signature, cbor.text.value("payload"), signer.publicKe
 // Sign and encrypt a payload to the recipient, then open and verify it back.
 // The second argument is authenticated but must be supplied separately.
 const metadata = cbor.text.value("metadata");
-const padding: cose.Padding = { name: "buckets", floor: 8192, step: 20 };
+const padding = cose.Padding.buckets({ floor: 8192, step: 20 });
 const sealed = await cose.seal(cbor.text.value("payload"), metadata, signer, recipient.publicKey(), domain, padding);
 const opened = await cose.open(cbor.text.bytes(sealed), metadata, recipient, signer.publicKey(), domain, 60);
 ```
 
-`cose.seal` and `cose.encrypt` take a `cose.Padding` policy after the domain. `{ name: "none" }` adds no padding. Buckets pad the signed envelope with zeros inside the encryption, to the smallest of a series of sizes that starts at `floor` bytes and grows by `1/step` of each, rounded up. The example's first sizes are 8,192, 8,602 and 9,033 bytes.
+`cose.seal` and `cose.encrypt` take a `cose.Padding` policy after the domain. `cose.Padding.none()` adds no padding. Buckets pad the signed envelope with zeros inside the encryption, to the smallest of a series of sizes that starts at `floor` bytes and grows by `1/step` of each, rounded up. The example's first sizes are 8,192, 8,602 and 9,033 bytes.
 
-Both bucket parameters must be integers from 1 to 4,294,967,295, and the padded envelope must fit wasm's allocation limit. TypeScript rejects anything else before it enters WASM, where a panic would trap the shared instance.
+Both bucket parameters must be integers from 1 to 4,294,967,295, or `cose.Padding.buckets` throws.
 
 `cose.open` and `cose.decrypt` need no policy. They strip any number of zero bytes after the signed envelope and refuse a nonzero byte.
 
