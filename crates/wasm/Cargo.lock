@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "darkbio-crypto-wasm"
-version = "0.20.0"
+version = "0.20.1"
 dependencies = [
  "darkbio-crypto",
  "js-sys",
