@@ -4,18 +4,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** CBOR wire validation and typed codec behavior. */
+
 import { describe, it, expect } from "vitest";
 import { encode as cborgEncode } from "cborg";
 import * as cbor from "../src/cbor.js";
 import { CodecError } from "../src/cbor.js";
 
+/** Formats encoded bytes for comparison with wire vectors. */
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
 
-// Runs a codec both ways through the bytes, checking the value comes back.
+/** Encodes and decodes a value through the same codec. */
 async function roundtrip<T>(codec: cbor.Codec<T>, value: T): Promise<T> {
   const bytes = await cbor.encode(codec.value(value));
   return cbor.decode(codec.bytes(bytes));
@@ -232,9 +235,7 @@ describe("cbor", () => {
       await expect(cbor.decode(cbor.raw.bytes(misordered))).rejects.toThrow();
     });
 
-    // Tests that every encoding owns its buffer exactly, so the bytes past it
-    // cannot expose what an earlier encoding held.
-    it("returns buffers holding nothing else", async () => {
+    it("returns a buffer sized to the encoded item", async () => {
       const secret = new Uint8Array(1000).fill(0x5a);
       await cbor.encode(cbor.bytes.value(secret));
 
@@ -242,9 +243,8 @@ describe("cbor", () => {
       expect(bytes.buffer.byteLength).toBe(bytes.byteLength);
     });
 
-    // Tests that decoded byte strings own their memory, even from an input
-    // whose slice() hands out views the way a Node Buffer does.
     it("decodes byte strings into copies", async () => {
+      // Match the view returned by Node's Buffer.slice()
       class ViewSlicing extends Uint8Array {
         slice(start?: number, end?: number) {
           return this.subarray(

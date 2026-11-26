@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Argon2id cryptography wrappers and parametrization.
+//! Password-based key derivation with Argon2id.
 //!
 //! https://datatracker.ietf.org/doc/html/rfc9106
 
@@ -14,18 +14,13 @@ use zeroize::Zeroizing;
 /// Minimum salt length in bytes, per the argon2 crate's hashing bounds.
 const MIN_SALT_LEN: usize = 8;
 
-/// Minimum memory cost in KiB (2 blocks per slice, 4 slices), per the argon2
-/// crate's Params bounds.
+/// Minimum memory cost per lane in KiB.
 const MIN_MEMORY_KIB: u32 = 8;
 
-/// Maximum memory cost in KiB, one KiB short of 2 GiB. A single allocation on
-/// WASM's 32-bit address space is capped at `isize::MAX` bytes, so exactly
-/// 2 GiB of working memory could never be allocated and would trap instead.
+/// Largest working memory allocation in KiB that fits the WASM address space.
 const MAX_MEMORY_KIB: u32 = 2 * 1024 * 1024 - 1;
 
-/// Maximum degree of parallelism. The argon2 crate rounds the memory cost up
-/// to 8 blocks per lane, so the lane count must also respect the memory cap
-/// (far above any real parallelism need either way).
+/// Maximum lane count at 8 KiB per lane.
 const MAX_THREADS: u32 = MAX_MEMORY_KIB / 8;
 
 /// Minimum output length in bytes, per the argon2 crate's Params bounds.
@@ -35,18 +30,12 @@ const MIN_OUTPUT_LEN: usize = 4;
 /// 32-bit address space. A longer output could never be allocated.
 const MAX_OUTPUT_LEN: usize = isize::MAX as usize;
 
-/// Derives a key from the password, salt, and cost parameters using Argon2id,
-/// returning a byte array that can be used as a cryptographic key.
+/// Derives a key from a password and salt with the supplied Argon2id costs.
 ///
 /// RFC 9106 Section 4 recommends time=1, memory=2 GiB and threads=4, or, where
 /// that much memory is not available, time=3, memory=64 MiB and threads=4. The
-/// first profile needs exactly 2 GiB, which is past what this binding can
-/// allocate. The threads parameter is Argon2's lane count, which changes the
-/// derived key; it does not select how many threads compute it.
-///
-/// All parameters are validated up front: the underlying implementation panics
-/// on invalid inputs, which inside WASM would trap and poison the instance.
-/// The password and the derived key are wiped from WASM memory before return.
+/// first profile exceeds the WASM allocation limit. The `threads` parameter
+/// sets the lane count and affects the derived key.
 #[wasm_bindgen]
 pub fn argon2_key(
     password: Vec<u8>,
@@ -56,6 +45,7 @@ pub fn argon2_key(
     threads: u32,
     out_len: usize,
 ) -> Result<js_sys::Uint8Array, JsError> {
+    // Guard the password before checking any argument
     let password = Zeroizing::new(password);
     if salt.len() < MIN_SALT_LEN {
         return Err(JsError::new("salt must be at least 8 bytes"));
@@ -85,6 +75,8 @@ pub fn argon2_key(
             "output length must be at most 2147483647 bytes",
         ));
     }
+
+    // Copy the derived key into JavaScript before its WASM buffer is wiped
     let key = darkbio_crypto::argon2::key_with_len(&password, salt, time, memory, threads, out_len);
     Ok(js_sys::Uint8Array::from(&key[..]))
 }

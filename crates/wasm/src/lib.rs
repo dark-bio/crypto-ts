@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! WebAssembly bindings for the Dark Bio cryptographic primitives and formats.
+
 pub mod argon2;
 pub mod cbor;
 pub mod cose;

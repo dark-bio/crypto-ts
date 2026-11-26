@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** CBOR serialization for the WASM interface. */
+
 import {
   decode as cborgDecode,
   encodeInto as cborgEncodeInto,
@@ -11,7 +13,7 @@ import {
   Tokenizer,
   Type,
 } from "cborg";
-import type { Encodable } from "../cbor.js";
+import type { Decodable, Encodable } from "../cbor.js";
 
 /** Decodes text keeping a leading U+FEFF, which a default TextDecoder drops. */
 const bomPreservingDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
@@ -20,11 +22,10 @@ const bomPreservingDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const textEncoder = new TextEncoder();
 
 /**
- * Tokenizer that keeps a leading byte order mark in text strings. cborg's own
- * decoder drops it, which would hand back a different string than the one
- * the bytes hold.
+ * Tokenizer that preserves a leading byte order mark in a text string.
  */
 class TextTokenizer extends Tokenizer {
+  /** Reads the next token, preserving the full text of a string. */
   next(): Token {
     const start = this.pos();
     const token = super.next();
@@ -42,9 +43,7 @@ class TextTokenizer extends Tokenizer {
 }
 
 /**
- * Decodes bytes the Rust validator already checked into what cborg makes of
- * them, maps as `Map`. Decoded byte strings are copies, never views into the
- * input.
+ * Decodes validated CBOR with maps as `Map` and byte strings as copies.
  *
  * @internal
  */
@@ -64,6 +63,19 @@ export function parse(data: Uint8Array): unknown {
     ...options,
     tokenizer: new TextTokenizer(bytes, options),
   }) as unknown;
+}
+
+/**
+ * Decodes a WASM result and wipes its temporary JavaScript buffer.
+ *
+ * @internal
+ */
+export function decodePayload<T>(envelope: Decodable<T>, bytes: Uint8Array): T {
+  try {
+    return envelope.codec.decode(parse(bytes));
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 /**
@@ -87,20 +99,17 @@ function isWellFormed(text: string): boolean {
 }
 
 /**
- * Serializes a value bound to its codec into the bytes the WASM boundary
- * takes, canonical by cborg's ordering and verified again on the Rust side.
+ * Serializes a value to CBOR for validation in WASM.
  *
- * cborg's own encode reuses one writer across all callers and can hand out
- * views into it, exposing earlier outputs through their buffer. Encoding into
- * a buffer owned here keeps plaintext out of that shared writer. Text is
- * encoded here too, as cborg would draw it from Node's shared Buffer pool.
- * Every scratch buffer and text encoding is wiped before it is dropped.
+ * The result owns its buffer. Temporary text encodings and scratch buffers
+ * are cleared after use.
  *
  * @internal
  */
 export function serialize<T>(item: Encodable<T>): Uint8Array {
   const value = item.codec.encode(item.value);
 
+  // Keep encoded text outside Node's shared buffer pool
   const texts: Uint8Array[] = [];
   const options = {
     typeEncoders: {
@@ -115,6 +124,8 @@ export function serialize<T>(item: Encodable<T>): Uint8Array {
       },
     },
   };
+
+  // Grow a private scratch buffer until the encoded value fits
   try {
     for (let size = 256; ; size *= 2) {
       const scratch = new Uint8Array(size);
@@ -136,5 +147,22 @@ export function serialize<T>(item: Encodable<T>): Uint8Array {
     for (const text of texts) {
       text.fill(0);
     }
+  }
+}
+
+/**
+ * Serializes a value for a single call and wipes the temporary buffer afterwards.
+ *
+ * @internal
+ */
+export function withSerialized<T, R>(
+  item: Encodable<T>,
+  run: (bytes: Uint8Array) => R,
+): R {
+  const bytes = serialize(item);
+  try {
+    return run(bytes);
+  } finally {
+    bytes.fill(0);
   }
 }

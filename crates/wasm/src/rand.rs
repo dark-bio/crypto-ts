@@ -4,17 +4,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! Random bytes for JavaScript callers.
+
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroizing;
 
-/// Maximum size of a single randomness request (64 MiB). Far beyond any key or
-/// nonce material need; absurd sizes (including negative JS numbers coerced to
-/// huge unsigned values) fail cleanly instead of aborting the instance on
-/// allocation failure.
+/// Maximum size of a single randomness request, in bytes.
 const MAX_OUTPUT_LEN: usize = 64 * 1024 * 1024;
 
-/// Generates a buffer of up to 64 MiB filled with randomness. The bytes are
-/// wiped from WASM memory before return, since they often become key material.
+/// Generates up to 64 MiB of random bytes and wipes the WASM output buffer.
 #[wasm_bindgen]
 pub fn rand_generate(bytes: usize) -> Result<js_sys::Uint8Array, JsError> {
     if bytes > MAX_OUTPUT_LEN {

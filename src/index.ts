@@ -5,14 +5,13 @@
 // license that can be found in the LICENSE file.
 
 /**
- * Post-quantum cryptography for the Dark Bio ecosystem, the Rust library
- * compiled to WASM behind a typed API.
+ * TypeScript bindings for the Dark Bio cryptography library compiled to WASM.
  *
  * Signatures come from `xdsa`, encryption from `xhpke`, and `cose` wraps both
  * into COSE envelopes using the Dark Bio wire profile. Payloads and
  * authenticated messages are bound to a `cbor` codec, which declares their
- * shape. The WASM module loads on the first call of any async function, so
- * there is no separate setup step.
+ * shape. Async entry points initialize WASM on demand.
+ *
  * COSE sealing and encryption take a sender padding policy. Opening strips
  * zero padding without needing that policy.
  *

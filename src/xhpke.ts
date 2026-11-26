@@ -114,6 +114,7 @@ export class Fingerprint {
   /** @internal */
   readonly _wasm: WasmFingerprint;
 
+  /** Wraps an imported or derived fingerprint. */
   private constructor(inner: WasmFingerprint) {
     this._wasm = inner;
   }
@@ -145,6 +146,7 @@ export class Fingerprint {
 
   /** Reports whether another fingerprint is the same. */
   equals(other: Fingerprint): boolean {
+    if (this === other) return true;
     return equal(this.toBytes(), other.toBytes());
   }
 }
@@ -154,6 +156,7 @@ export class PublicKey {
   /** @internal */
   readonly _wasm: WasmPublicKey;
 
+  /** Wraps an encryption key in WASM memory. */
   private constructor(inner: WasmPublicKey) {
     this._wasm = inner;
   }
@@ -174,9 +177,8 @@ export class PublicKey {
   }
 
   /**
-   * Parses a PEM string into a public key. The input must be exactly one
-   * `PUBLIC KEY` block, with no leading whitespace, strict base64 and LF or
-   * CRLF line endings throughout.
+   * Parses one `PUBLIC KEY` block starting at the first character. The strict
+   * base64 body requires nonempty lines and consistent LF or CRLF line endings.
    *
    * @throws If the PEM is malformed or holds another kind of key
    */
@@ -197,6 +199,7 @@ export class PublicKey {
 
   /** Reports whether another public key is the same. */
   equals(other: PublicKey): boolean {
+    if (this === other) return true;
     return equal(this.toBytes(), other.toBytes());
   }
 
@@ -254,8 +257,10 @@ export class PublicKey {
  * out.
  */
 export class SecretKey {
+  /** Decryption key handle, cleared on disposal. */
   private inner: WasmSecretKey | undefined;
 
+  /** Takes ownership of an imported or generated decryption key. */
   private constructor(inner: WasmSecretKey) {
     this.inner = inner;
   }
@@ -285,9 +290,8 @@ export class SecretKey {
   }
 
   /**
-   * Parses a PEM string into a secret key. The input must be exactly one
-   * `PRIVATE KEY` block, with no leading whitespace, strict base64 and LF or
-   * CRLF line endings throughout.
+   * Parses one `PRIVATE KEY` block starting at the first character. The strict
+   * base64 body requires nonempty lines and consistent LF or CRLF line endings.
    *
    * @throws If the PEM is malformed or holds another kind of key
    */
@@ -359,11 +363,10 @@ export class SecretKey {
   }
 
   /**
-   * Wipes the secret key held in WASM memory. Every later use of this key
-   * throws, and disposing it again does nothing. Copies already exported, such
-   * as by {@link SecretKey.toBytes}, and receivers already created from it are
-   * not affected. Without a dispose, the key is only wiped if the garbage
-   * collector finalizes it, which is not guaranteed.
+   * Wipes the decryption key in WASM memory. Subsequent key operations throw.
+   * Disposal is idempotent. Existing receivers and exported key material have
+   * independent lifetimes. Without explicit disposal, cleanup depends on
+   * garbage collection.
    */
   dispose(): void {
     const inner = this.inner;
@@ -379,8 +382,10 @@ export class SecretKey {
  * {@link Receiver} must open messages in the order they were sealed.
  */
 export class Sender {
+  /** Encryption context handle, cleared on disposal. */
   private inner: WasmSender | undefined;
 
+  /** Takes ownership of the sender context. */
   private constructor(inner: WasmSender) {
     this.inner = inner;
   }
@@ -390,6 +395,7 @@ export class Sender {
     return new Sender(inner);
   }
 
+  /** Returns the live encryption context or throws after disposal. */
   private get wasm(): WasmSender {
     if (this.inner === undefined) {
       throw new Error("sender used after dispose");
@@ -409,10 +415,9 @@ export class Sender {
   }
 
   /**
-   * Wipes the keys of this context held in WASM memory. Every later use of the
-   * sender throws, and disposing it again does nothing. Without a dispose, the
-   * keys are only wiped if the garbage collector finalizes the sender, which is
-   * not guaranteed.
+   * Wipes the sender's keys in WASM memory. Subsequent sealing calls throw.
+   * Disposal is idempotent. Without explicit disposal, cleanup depends on
+   * garbage collection.
    */
   dispose(): void {
     const inner = this.inner;
@@ -427,8 +432,10 @@ export class Sender {
  * {@link Sender} sealed them.
  */
 export class Receiver {
+  /** Decryption context handle, cleared on disposal. */
   private inner: WasmReceiver | undefined;
 
+  /** Takes ownership of the receiver context. */
   private constructor(inner: WasmReceiver) {
     this.inner = inner;
   }
@@ -438,6 +445,7 @@ export class Receiver {
     return new Receiver(inner);
   }
 
+  /** Returns the live decryption context or throws after disposal. */
   private get wasm(): WasmReceiver {
     if (this.inner === undefined) {
       throw new Error("receiver used after dispose");
@@ -459,10 +467,9 @@ export class Receiver {
   }
 
   /**
-   * Wipes the keys of this context held in WASM memory. Every later use of the
-   * receiver throws, and disposing it again does nothing. Without a dispose,
-   * the keys are only wiped if the garbage collector finalizes the receiver,
-   * which is not guaranteed.
+   * Wipes the receiver's keys in WASM memory. Subsequent opening calls throw.
+   * Disposal is idempotent. Without explicit disposal, cleanup depends on
+   * garbage collection.
    */
   dispose(): void {
     const inner = this.inner;

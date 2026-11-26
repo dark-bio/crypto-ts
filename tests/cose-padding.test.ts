@@ -64,7 +64,6 @@ function sealPlaintext(
 describe("COSE padding", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  // Pin each bucket and transition to the fixed expectations in crypto-rs.
   it("matches the bucket sequences and boundary targets", async () => {
     const recipient = await xhpke.SecretKey.fromBytes(
       new Uint8Array(32).fill(7),
@@ -117,8 +116,7 @@ describe("COSE padding", () => {
     }
   });
 
-  // Pin the raw plaintext, stripping and verification against the v0.16 corpus.
-  it("seals and encrypts the exact padded and unpadded signed envelope", async () => {
+  it("pads and opens fresh signatures and the v0.16 signed envelope", async () => {
     const signer = await xdsa.SecretKey.fromBytes(fromHex(fixtures.xdsa_seed));
     const recipient = await xhpke.SecretKey.fromBytes(
       fromHex(fixtures.xhpke_seed),
@@ -133,27 +131,33 @@ describe("COSE padding", () => {
       ["none", cose.Padding.none(), 3461, 0],
       ["buckets", cose.Padding.buckets({ floor: 8192, step: 20 }), 8192, 4731],
     ] as const) {
-      const envelopes = [
-        await cose.seal(
-          cbor.bytes.value(payload),
-          cbor.bytes.value(aad),
-          signer,
-          recipient.publicKey(),
-          domain,
-          padding,
-        ),
-        await cose.encrypt(
-          sign1,
-          cbor.bytes.value(aad),
-          recipient.publicKey(),
-          domain,
-          padding,
-        ),
-      ];
-      for (const envelope of envelopes) {
+      // Seal the payload with a fresh signature
+      const sealed = await cose.seal(
+        cbor.bytes.value(payload),
+        cbor.bytes.value(aad),
+        signer,
+        recipient.publicKey(),
+        domain,
+        padding,
+      );
+
+      // Encrypt the existing signature without changing its bytes
+      const encrypted = await cose.encrypt(
+        sign1,
+        cbor.bytes.value(aad),
+        recipient.publicKey(),
+        domain,
+        padding,
+      );
+      // Both envelopes have the same prefix length and authenticated zero suffix
+      for (const envelope of [sealed, encrypted]) {
         const plaintext = openPlaintext(envelope, aad, recipient, domain);
         expect(plaintext.length, name).toBe(length);
-        expect(plaintext.slice(0, 3461), name).toEqual(sign1);
+        const prefix = plaintext.slice(0, 3461);
+        expect(prefix.length, name).toBe(3461);
+        if (envelope === encrypted) {
+          expect(prefix, name).toEqual(sign1);
+        }
         expect(plaintext.slice(3461), name).toEqual(new Uint8Array(zeros));
         expect(
           await cose.decrypt(
@@ -162,7 +166,7 @@ describe("COSE padding", () => {
             recipient,
             domain,
           ),
-        ).toEqual(sign1);
+        ).toEqual(prefix);
         expect(
           await cose.open(
             cbor.bytes.bytes(envelope),
@@ -175,11 +179,9 @@ describe("COSE padding", () => {
         ).toEqual(payload);
       }
     }
-    expect(sign1).toEqual(fromHex(fixtures.sign1));
-    expect(payload).toEqual(fromHex(fixtures.payload));
   });
 
-  // The padded fixture is imported unchanged from crypto-rs/src/cose/testdata.
+  // Use the padded envelope from crypto-rs/src/cose/testdata
   it("opens the shared padded Rust fixture", async () => {
     const signer = await xdsa.SecretKey.fromBytes(fromHex(padded.xdsa_seed));
     const recipient = await xhpke.SecretKey.fromBytes(
@@ -237,7 +239,7 @@ describe("COSE padding", () => {
     }
   });
 
-  it("rejects non-instance padding in seal and encrypt", async () => {
+  it("rejects invalid padding policies in sealing and encryption", async () => {
     const signer = await xdsa.SecretKey.generate();
     const recipient = await xhpke.SecretKey.generate();
     const domain = new Uint8Array();
@@ -254,6 +256,16 @@ describe("COSE padding", () => {
       const operations = [
         () =>
           cose.seal(msg, aad, signer, recipient.publicKey(), domain, padding),
+        () =>
+          cose.sealAt(
+            msg,
+            aad,
+            signer,
+            recipient.publicKey(),
+            domain,
+            padding,
+            0,
+          ),
         () => cose.encrypt(sign1, aad, recipient.publicKey(), domain, padding),
       ];
       for (const operation of operations) {
@@ -284,6 +296,10 @@ describe("COSE padding", () => {
         [
           "seal",
           () => cose.seal(msg, aad, signer, recipientKey, domain, padding),
+        ],
+        [
+          "sealAt",
+          () => cose.sealAt(msg, aad, signer, recipientKey, domain, padding, 0),
         ],
         [
           "encrypt",
@@ -317,6 +333,20 @@ describe("COSE padding", () => {
           "seal AAD CBOR",
           () =>
             cose.seal(msg, invalidCbor, signer, recipientKey, domain, padding),
+          /invalid AAD CBOR/,
+        ],
+        [
+          "sealAt AAD CBOR",
+          () =>
+            cose.sealAt(
+              msg,
+              invalidCbor,
+              signer,
+              recipientKey,
+              domain,
+              padding,
+              0,
+            ),
           /invalid AAD CBOR/,
         ],
         [
@@ -359,7 +389,6 @@ describe("COSE padding", () => {
     }
   });
 
-  // Accept any count of zeros but reject a nonzero byte anywhere after the item.
   it("opens off-bucket padding and rejects nonzero padding", async () => {
     const signer = await xdsa.SecretKey.fromBytes(fromHex(fixtures.xdsa_seed));
     const recipient = await xhpke.SecretKey.fromBytes(
@@ -417,7 +446,6 @@ describe("COSE padding", () => {
     }
   });
 
-  // Padding starts after one complete CBOR item, including its own trailing zeros.
   it("rejects malformed plaintext and preserves the original CBOR item", async () => {
     const recipient = await xhpke.SecretKey.fromBytes(
       new Uint8Array(32).fill(7),

@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** WASM initialization and synchronous codec access. */
+
 import { describe, it, expect } from "vitest";
 import { SecretKey as XdsaSecretKey, publicKey } from "../src/xdsa.js";
 import {
@@ -14,11 +16,9 @@ import { generate } from "../src/rand.js";
 import { cbor, cose } from "../src/index.js";
 
 describe("init", () => {
-  // Codecs run synchronously and construct keys through WASM, so before any
-  // entry point has initialised the module they must fail clearly.
   it("refuses synchronous key decoding before initialization", () => {
     expect(() => publicKey.decode(new Uint8Array(32))).toThrow(
-      "not initialised",
+      "not initialized",
     );
   });
 
@@ -37,7 +37,7 @@ describe("init", () => {
       ),
     ).rejects.toThrow("padding must be a Padding instance");
     expect(() => publicKey.decode(new Uint8Array(32))).toThrow(
-      "not initialised",
+      "not initialized",
     );
     await expect(
       cose.encrypt(
@@ -49,13 +49,10 @@ describe("init", () => {
       ),
     ).rejects.toThrow("padding must be a Padding instance");
     expect(() => publicKey.decode(new Uint8Array(32))).toThrow(
-      "not initialised",
+      "not initialized",
     );
   });
 
-  // The first WASM calls race across modules on purpose: concurrent callers
-  // must share a single module instantiation, and handles created by either
-  // must stay usable afterwards.
   it("handles concurrent first-time initialization", async () => {
     const [signer, receiver, noise] = await Promise.all([
       XdsaSecretKey.generate(),

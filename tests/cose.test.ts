@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** COSE signing, encryption and wire compatibility. */
+
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { decode as cborgDecode, encode as cborgEncode } from "cborg";
 import * as cbor from "../src/cbor.js";
@@ -11,14 +13,20 @@ import { CodecError } from "../src/cbor.js";
 import {
   Padding,
   sign,
+  signAt,
   signDetached,
+  signDetachedAt,
   verify,
+  verifyAt,
   verifyDetached,
+  verifyDetachedAt,
   signer,
   peek,
   recipient,
   seal,
+  sealAt,
   open,
+  openAt,
   encrypt,
   decrypt,
 } from "../src/cose.js";
@@ -494,8 +502,98 @@ describe("cose", () => {
     });
   });
 
-  // Tests that signature timestamps pass up to the drift bound in either
-  // direction and fail one second beyond it, for every verifying operation.
+  it("signs and checks explicit timestamps across the signed 64-bit range", async () => {
+    const signingKey = await XdsaSecretKey.generate();
+    const recipientKey = await XhpkeSecretKey.generate();
+    const verifier = signingKey.publicKey();
+    const domain = new TextEncoder().encode("explicit time");
+    const msg = cbor.text.value("payload");
+    const auth = Auth.value([2n]);
+    const min = -(1n << 63n);
+    const max = (1n << 63n) - 1n;
+
+    // Exercise each wire format with the same time and drift cases
+    const operations: [
+      string,
+      (timestamp: number | bigint) => Promise<Uint8Array>,
+      (
+        data: Uint8Array,
+        drift: number | undefined,
+        now: number | bigint,
+      ) => Promise<unknown>,
+      unknown,
+    ][] = [
+      [
+        "embedded",
+        (t) => signAt(msg, auth, signingKey, domain, t),
+        (data, drift, now) =>
+          verifyAt(cbor.text.bytes(data), auth, verifier, domain, drift, now),
+        "payload",
+      ],
+      [
+        "detached",
+        (t) => signDetachedAt(auth, signingKey, domain, t),
+        (data, drift, now) =>
+          verifyDetachedAt(data, auth, verifier, domain, drift, now),
+        undefined,
+      ],
+      [
+        "sealed",
+        (t) =>
+          sealAt(
+            msg,
+            auth,
+            signingKey,
+            recipientKey.publicKey(),
+            domain,
+            Padding.none(),
+            t,
+          ),
+        (data, drift, now) =>
+          openAt(
+            cbor.text.bytes(data),
+            auth,
+            recipientKey,
+            verifier,
+            domain,
+            drift,
+            now,
+          ),
+        "payload",
+      ],
+    ];
+    for (const [name, create, check, expected] of operations) {
+      // Check the two signed limits and a time before the Unix epoch
+      for (const time of [min, -37, max]) {
+        const data = await create(time);
+        expect(await check(data, 0, time), name).toEqual(expected);
+        const other = time === min ? max : min;
+        await expect(check(data, 1, other), name).rejects.toThrow(/stale/);
+        expect(await check(data, undefined, other), name).toEqual(expected);
+      }
+
+      // The reference time must be valid even when drift checking is disabled
+      const data = await create(0);
+      for (const time of [
+        0.5,
+        NaN,
+        Infinity,
+        -Infinity,
+        2 ** 53,
+        min - 1n,
+        max + 1n,
+        undefined,
+      ]) {
+        const id = `${name}/${String(time)}`;
+        await expect(create(time as number), id).rejects.toThrow(RangeError);
+        await expect(
+          check(data, undefined, time as number),
+          id,
+        ).rejects.toThrow(RangeError);
+      }
+    }
+  });
+
   describe("drift bound", () => {
     afterEach(() => {
       vi.restoreAllMocks();
@@ -555,8 +653,7 @@ describe("cose", () => {
     });
   });
 
-  // Tests that the v0.16 fixture corpus still validates, since that was in the
-  // first public release of the Ark, so we can't change the format anymore.
+  // Read the signed and encrypted messages from the v0.16 wire fixtures
   describe("v0.16 fixtures", () => {
     it("verifies and opens the committed messages", async () => {
       const signingKey = await XdsaSecretKey.fromBytes(

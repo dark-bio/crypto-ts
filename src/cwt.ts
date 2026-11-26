@@ -35,8 +35,7 @@
  * const domain = new TextEncoder().encode("device-cert");
  * const now = 1_700_000_000n;
  *
- * // Example RAND UEID from the generated identity, type 0x01 and 16 identifier bytes.
- * // Provision it once and retain it for the device's lifetime, even if keys change.
+ * // Provision a RAND UEID once and retain it for the device's lifetime
  * const ueid = new Uint8Array([0x01, ...device.fingerprint().toBytes().slice(0, 16)]);
  *
  * const cert = { sub: "ark-0001", exp: now + 3600n, nbf: now, cnf: device.publicKey(), ueid };
@@ -68,15 +67,16 @@ import {
   type Decodable,
   type Encodable,
 } from "./cbor.js";
-import { parse, serialize } from "./internal/cborg.js";
+import { decodePayload, withSerialized } from "./internal/cborg.js";
 import {
   cwt_issue,
+  cwt_issue_at,
   cwt_verify,
   cwt_signer,
   cwt_peek,
 } from "./wasm/darkbio_crypto_wasm.js";
 import { ensureInit } from "./internal/init.js";
-import { U64_MAX } from "./internal/limits.js";
+import { i64, U64_MAX } from "./internal/limits.js";
 import * as xdsa from "./xdsa.js";
 import * as xhpke from "./xhpke.js";
 
@@ -95,8 +95,7 @@ export enum DebugState {
    */
   DisabledPermanently = 3,
   /**
-   * All debug facilities are permanently disabled, including manufacturer
-   * facilities, and none can be re-enabled.
+   * All debug facilities are permanently disabled, including the manufacturer's.
    */
   DisabledFullyPermanently = 4,
 }
@@ -172,8 +171,7 @@ export const oemid: Codec<Oemid> = codec(
 );
 
 /**
- * Codec of a version, the text wrapped in a one-element array as RFC 9711
- * has it. The optional scheme element is not supported.
+ * Codec for an RFC 9711 version string in a single-element array.
  */
 export const version: Codec<string> = codec(
   (value) => [text.encode(value)],
@@ -213,7 +211,7 @@ export function confirmation<K>(algorithm: number, key: Codec<K>): Codec<K> {
   );
 }
 
-/** The numeric members of an enum object. */
+/** Returns the numeric members of an enum. */
 function members<E extends number>(values: Record<string, E | string>): E[] {
   return Object.values(values).filter(
     (value): value is E => typeof value === "number",
@@ -302,7 +300,7 @@ export const claims = {
   },
 };
 
-/** Converts the clock of a verification for the WASM boundary. */
+/** Rounds the CWT reference time down to unsigned Unix seconds. */
 function nowToBigInt(now?: number | bigint): bigint | undefined {
   if (now === undefined) return undefined;
   if (
@@ -323,7 +321,7 @@ function nowToBigInt(now?: number | bigint): bigint | undefined {
  *
  * The claims must encode as a CBOR map, such as a `cbor.map` of the
  * {@link claims} fields. Uses the current system time as the COSE signature
- * timestamp.
+ * timestamp. Use {@link issueAt} to supply the timestamp.
  *
  * @param claims - The claims to include in the token
  * @param signer - The xDSA secret key to sign with
@@ -338,7 +336,40 @@ export async function issue<C>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return cwt_issue(serialize(claims), signer._wasm, domain);
+  return withSerialized(claims, (encoded) =>
+    cwt_issue(encoded, signer._wasm, domain),
+  );
+}
+
+/**
+ * Issues a CWT by signing the claims with COSE Sign1 and an explicit COSE
+ * signature timestamp.
+ *
+ * The claims must encode as a CBOR map, such as a `cbor.map` of the
+ * {@link claims} fields.
+ *
+ * @param claims - The claims to include in the token
+ * @param signer - The xDSA secret key to sign with
+ * @param domain - Application domain for separating protocol purposes
+ * @param timestamp - Signing time in whole seconds since the Unix epoch, as a
+ *   safe integer or a signed 64-bit bigint
+ * @returns The serialized CWT
+ * @throws RangeError if `timestamp` is not a safe integer or a signed 64-bit
+ *   bigint
+ * @throws CodecError if the claims do not fit their codec
+ * @throws If the claims do not encode as a CBOR map
+ */
+export async function issueAt<C>(
+  claims: Encodable<C>,
+  signer: xdsa.SecretKey,
+  domain: Uint8Array,
+  timestamp: number | bigint,
+): Promise<Uint8Array> {
+  const secs = i64(timestamp, "timestamp");
+  await ensureInit();
+  return withSerialized(claims, (encoded) =>
+    cwt_issue_at(encoded, signer._wasm, domain, secs),
+  );
 }
 
 /**
@@ -347,7 +378,7 @@ export async function issue<C>(
  *
  * When `now` is given, the `nbf` claim (key 5) must be present and
  * `nbf <= now`. If the `exp` claim (key 4) is present too, `now < exp` must
- * also hold. When `now` is undefined, temporal validation is skipped entirely.
+ * also hold. An undefined `now` skips the time checks.
  *
  * The COSE signature timestamp is not checked, since temporal validity comes
  * from the CWT claims. The codec determines the accepted claim schema.
@@ -372,14 +403,10 @@ export async function verify<C>(
   domain: Uint8Array,
   now?: number | bigint,
 ): Promise<C> {
+  const secs = nowToBigInt(now);
   await ensureInit();
-  const payload = cwt_verify(
-    token.bytes,
-    verifier._wasm,
-    domain,
-    nowToBigInt(now),
-  );
-  return token.codec.decode(parse(payload));
+  const payload = cwt_verify(token.bytes, verifier._wasm, domain, secs);
+  return decodePayload(token, payload);
 }
 
 /**
@@ -413,5 +440,5 @@ export async function signer(token: Uint8Array): Promise<xdsa.Fingerprint> {
  */
 export async function peek<C>(token: Decodable<C>): Promise<C> {
   await ensureInit();
-  return token.codec.decode(parse(cwt_peek(token.bytes)));
+  return decodePayload(token, cwt_peek(token.bytes));
 }

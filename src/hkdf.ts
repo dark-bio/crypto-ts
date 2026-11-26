@@ -9,9 +9,8 @@
  *
  * https://datatracker.ietf.org/doc/html/rfc5869
  *
- * Stretches a secret that is already high entropy, a shared secret or a file
- * key, into one or more keys bound to a context string. It is not a password
- * hash; the `argon2` module is the one for that.
+ * Derives context-specific keys from a high-entropy secret such as a shared
+ * secret or a file key. For password-based key derivation, see `argon2`.
  *
  * @example
  * ```ts
@@ -61,9 +60,8 @@ export async function key(
  * Extracts a 32-byte pseudorandom key from the secret and salt, for use with
  * {@link expand}.
  *
- * Only use this to reuse the extracted key with multiple {@link expand} calls
- * and different contexts. Most scenarios, including the derivation of multiple
- * keys, should use {@link key} instead.
+ * Reuse the extracted key with {@link expand} to derive keys for different
+ * contexts. {@link key} performs both steps in one call.
  *
  * @param secret - The input keying material, already high entropy
  * @param salt - Optional salt, empty for none

@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** Random byte generation and request size limits. */
+
 import { describe, it, expect } from "vitest";
 import { generate } from "../src/rand.js";
 

@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** Composite signing, key encodings and fingerprint comparisons. */
+
 import { describe, it, expect } from "vitest";
 import * as cbor from "../src/cbor.js";
 import { CodecError } from "../src/cbor.js";
@@ -72,16 +74,18 @@ describe("xdsa", () => {
     expect(toHex(pk1.toBytes())).toBe(toHex(pk2.toBytes()));
   });
 
-  it("signs and verifies correctly", async () => {
+  it("produces distinct valid hedged signatures for the same message", async () => {
     const sk = await SecretKey.generate();
-    const pk = await sk.publicKey();
+    const pk = sk.publicKey();
     const message = new TextEncoder().encode("hello world");
 
-    const sig = await sk.sign(message);
-    expect(sig.toBytes().length).toBe(SIGNATURE_SIZE);
-
-    const valid = await pk.verify(message, sig);
-    expect(valid).toBe(true);
+    // Both signatures authenticate the same input
+    const first = sk.sign(message);
+    const second = sk.sign(message);
+    expect(first.toBytes().length).toBe(SIGNATURE_SIZE);
+    expect(first.toBytes()).not.toEqual(second.toBytes());
+    expect(pk.verify(message, first)).toBe(true);
+    expect(pk.verify(message, second)).toBe(true);
   });
 
   it("rejects invalid signature", async () => {
@@ -140,7 +144,7 @@ describe("xdsa", () => {
   it("signs large message", async () => {
     const sk = await SecretKey.generate();
     const pk = await sk.publicKey();
-    const message = new Uint8Array(1024 * 1024); // 1MB
+    const message = new Uint8Array(1024 * 1024); // 1 MiB
     message.fill(0x42);
 
     const sig = await sk.sign(message);
@@ -172,13 +176,12 @@ describe("xdsa", () => {
     expect(toHex(sig2.toBytes())).toBe(toHex(sig.toBytes()));
   });
 
-  // Tests that a signature fails when either half alone is tampered with, the
-  // ML-DSA-65 half first and the Ed25519 half in the last 64 bytes.
   it("rejects a tampered signature half", async () => {
     const sk = await SecretKey.generate();
     const message = new TextEncoder().encode("halves");
     const bytes = sk.sign(message).toBytes();
 
+    // Flip one bit in the ML-DSA component, then one in the Ed25519 component
     for (const index of [0, SIGNATURE_SIZE - 64]) {
       const tampered = bytes.slice();
       tampered[index] ^= 1;
@@ -202,6 +205,27 @@ describe("xdsa", () => {
     );
   });
 
+  it.each(["\n", "\r\n"])(
+    "rejects blank PEM body lines with %j endings",
+    async (eol) => {
+      const key = await SecretKey.generate();
+      const lines = key.toPem().trimEnd().split("\n");
+
+      // Insert a blank line before, within and after the base64 data
+      for (const index of [1, 2, lines.length - 1]) {
+        const malformed = [
+          ...lines.slice(0, index),
+          "",
+          ...lines.slice(index),
+        ].join(eol);
+        await expect(
+          SecretKey.fromPem(malformed),
+          String(index),
+        ).rejects.toThrow(/blank line/);
+      }
+    },
+  );
+
   it("roundtrips Fingerprint through bytes", async () => {
     const sk = await SecretKey.generate();
     const fp = await sk.fingerprint();
@@ -215,6 +239,7 @@ describe("xdsa", () => {
       const sk = await SecretKey.generate();
       const other = await SecretKey.generate();
       const fp = sk.fingerprint();
+      expect(fp.equals(fp)).toBe(true);
       expect(fp.equals(sk.publicKey().fingerprint())).toBe(true);
       expect(fp.equals(await Fingerprint.fromBytes(fp.toBytes()))).toBe(true);
       expect(fp.equals(other.fingerprint())).toBe(false);
@@ -225,12 +250,10 @@ describe("xdsa", () => {
     it("compares public keys", async () => {
       const sk = await SecretKey.generate();
       const other = await SecretKey.generate();
-      expect(
-        sk
-          .publicKey()
-          .equals(await PublicKey.fromBytes(sk.publicKey().toBytes())),
-      ).toBe(true);
-      expect(sk.publicKey().equals(other.publicKey())).toBe(false);
+      const pk = sk.publicKey();
+      expect(pk.equals(pk)).toBe(true);
+      expect(pk.equals(await PublicKey.fromBytes(pk.toBytes()))).toBe(true);
+      expect(pk.equals(other.publicKey())).toBe(false);
     });
 
     it("roundtrips keys and fingerprints through their codecs", async () => {
@@ -259,9 +282,6 @@ describe("xdsa", () => {
     });
   });
 
-  // Tests that a disposed secret key refuses every operation, directly and
-  // through COSE and CWT, that values derived from it earlier stay usable, and
-  // that disposing it again does nothing.
   it("refuses a disposed secret key", async () => {
     const sk = await SecretKey.generate();
     const domain = new TextEncoder().encode("dispose");
@@ -296,8 +316,6 @@ describe("xdsa", () => {
     sk.dispose();
   });
 
-  // Tests that disposing a secret key while an asynchronous call is about to
-  // use it rejects that call instead of reaching the freed key.
   it("rejects a call pending on a disposed key", async () => {
     const sk = await SecretKey.generate();
     const pending = cose.signDetached(

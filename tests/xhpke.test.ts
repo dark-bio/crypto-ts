@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** X-Wing key encodings, encryption and stateful message ordering. */
+
 import { describe, it, expect } from "vitest";
 import * as cbor from "../src/cbor.js";
 import { CodecError } from "../src/cbor.js";
@@ -240,8 +242,6 @@ describe("xhpke", () => {
       expect(new TextDecoder().decode(pt3)).toBe("third message");
     });
 
-    // Tests that a message opened out of order is rejected without consuming
-    // a nonce, so the messages still open once taken in order.
     it("recovers after rejecting an out of order message", async () => {
       const sk = await SecretKey.generate();
       const domain = new TextEncoder().encode("order-test");
@@ -288,8 +288,7 @@ describe("xhpke", () => {
       const { sender, encapKey } = await pk1.newSender(domain);
       const ct = await sender.seal(new TextEncoder().encode("hello"), aad);
 
-      // Wrong key: receiver creation may succeed (KEM decap produces a
-      // different shared secret), but open will fail.
+      // Decapsulation with another key derives a different shared secret
       const receiver = await sk2.newReceiver(encapKey, domain);
       expect(() => receiver.open(ct, aad)).toThrow();
     });
@@ -322,8 +321,7 @@ describe("xhpke", () => {
       );
       const ct = await sender.seal(new TextEncoder().encode("hello"), aad);
 
-      // Wrong domain: receiver creation may succeed, but open will fail
-      // because the derived key material differs.
+      // The receiver derives a different key for the second domain
       const receiver = await sk.newReceiver(
         encapKey,
         new TextEncoder().encode("domain2"),
@@ -367,6 +365,7 @@ describe("xhpke", () => {
       const sk = await SecretKey.generate();
       const other = await SecretKey.generate();
       const fp = sk.fingerprint();
+      expect(fp.equals(fp)).toBe(true);
       expect(fp.equals(sk.publicKey().fingerprint())).toBe(true);
       expect(fp.equals(await Fingerprint.fromBytes(fp.toBytes()))).toBe(true);
       expect(fp.equals(other.fingerprint())).toBe(false);
@@ -377,12 +376,10 @@ describe("xhpke", () => {
     it("compares public keys", async () => {
       const sk = await SecretKey.generate();
       const other = await SecretKey.generate();
-      expect(
-        sk
-          .publicKey()
-          .equals(await PublicKey.fromBytes(sk.publicKey().toBytes())),
-      ).toBe(true);
-      expect(sk.publicKey().equals(other.publicKey())).toBe(false);
+      const pk = sk.publicKey();
+      expect(pk.equals(pk)).toBe(true);
+      expect(pk.equals(await PublicKey.fromBytes(pk.toBytes()))).toBe(true);
+      expect(pk.equals(other.publicKey())).toBe(false);
     });
 
     it("roundtrips keys and fingerprints through their codecs", async () => {
@@ -411,9 +408,6 @@ describe("xhpke", () => {
     });
   });
 
-  // Tests that disposed secret keys, senders and receivers refuse every
-  // operation, directly and through COSE, that a receiver created from a key
-  // before its disposal stays usable, and that disposing again does nothing.
   it("refuses disposed keys and contexts", async () => {
     const sk = await SecretKey.generate();
     const signer = await XdsaSecretKey.generate();
