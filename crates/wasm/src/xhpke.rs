@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! HPKE cryptography wrappers and parametrization.
+//! Hybrid public key encryption for JavaScript callers.
 //!
 //! https://datatracker.ietf.org/doc/html/rfc9180
 
@@ -39,6 +39,7 @@ pub fn xhpke_fingerprint_size() -> usize {
 /// Opaque xHPKE secret key. Key material stays inside WASM memory.
 #[wasm_bindgen]
 pub struct XhpkeSecretKey {
+    /// Decryption key owned by this handle.
     pub(crate) inner: xhpke::SecretKey,
 }
 
@@ -55,14 +56,12 @@ impl XhpkeSecretKey {
     /// memory before return.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<XhpkeSecretKey, JsError> {
         let bytes = Zeroizing::new(bytes);
-        let seed: Zeroizing<[u8; 32]> = Zeroizing::new(
-            bytes
-                .as_slice()
-                .try_into()
-                .map_err(|_| JsError::new("secret key must be 32 bytes"))?,
-        );
+        let seed: &[u8; xhpke::SECRET_KEY_SIZE] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| JsError::new("secret key must be 32 bytes"))?;
         Ok(Self {
-            inner: xhpke::SecretKey::from_bytes(&seed),
+            inner: xhpke::SecretKey::from_bytes(seed),
         })
     }
 
@@ -75,14 +74,12 @@ impl XhpkeSecretKey {
         })
     }
 
-    /// Serializes the secret key to a 32-byte seed, copied straight into JS
-    /// memory so no unwiped copy is left in WASM memory.
+    /// Exports the 32-byte seed to a JavaScript byte array.
     pub fn to_bytes(&self) -> js_sys::Uint8Array {
         js_sys::Uint8Array::from(&self.inner.to_bytes()[..])
     }
 
-    /// Serializes the secret key to PEM format, copied straight into a JS
-    /// string so no unwiped copy is left in WASM memory.
+    /// Exports the PEM-encoded secret key to a JavaScript string.
     pub fn to_pem(&self) -> js_sys::JsString {
         js_sys::JsString::from(self.inner.to_pem().as_str())
     }
@@ -103,38 +100,35 @@ impl XhpkeSecretKey {
 
     /// Creates an HPKE receiver context for multi-message decryption.
     pub fn new_receiver(&self, encap_key: &[u8], domain: &[u8]) -> Result<XhpkeReceiver, JsError> {
-        let encap_key_array: [u8; 1120] = encap_key
+        let encap_key: &[u8; xhpke::ENCAP_KEY_SIZE] = encap_key
             .try_into()
             .map_err(|_| JsError::new("encapsulated key must be 1120 bytes"))?;
 
         let receiver = self
             .inner
-            .new_receiver(&encap_key_array, domain)
+            .new_receiver(encap_key, domain)
             .map_err(|e| JsError::new(&e.to_string()))?;
 
         Ok(XhpkeReceiver { inner: receiver })
     }
 
-    /// Decrypts a single-shot sealed message. The plaintext is copied straight
-    /// into JS memory so no unwiped copy is left in WASM memory.
-    /// Input: encapsulated key (1120 bytes) || ciphertext
+    /// Decrypts ciphertext prefixed with the 1120-byte encapsulated key.
     pub fn open(
         &self,
         sealed: &[u8],
-        msg_to_auth: &[u8],
+        msg_to_auth: Vec<u8>,
         domain: &[u8],
     ) -> Result<js_sys::Uint8Array, JsError> {
-        if sealed.len() < xhpke::ENCAP_KEY_SIZE {
-            return Err(JsError::new("sealed data too short"));
-        }
-        let session_key: [u8; 1120] = sealed[..xhpke::ENCAP_KEY_SIZE]
-            .try_into()
-            .map_err(|_| JsError::new("invalid encapsulated key"))?;
-        let ciphertext = &sealed[xhpke::ENCAP_KEY_SIZE..];
+        let auth = Zeroizing::new(msg_to_auth);
+        // Split off the fixed-size encapsulated key
+        let (encap_key, ciphertext) = sealed
+            .split_first_chunk::<{ xhpke::ENCAP_KEY_SIZE }>()
+            .ok_or_else(|| JsError::new("sealed data too short"))?;
 
+        // Wipe the plaintext after copying it into JavaScript
         let plaintext = Zeroizing::new(
             self.inner
-                .open(&session_key, ciphertext, msg_to_auth, domain)
+                .open(encap_key, ciphertext, &auth, domain)
                 .map_err(|e| JsError::new(&e.to_string()))?,
         );
         Ok(js_sys::Uint8Array::from(&plaintext[..]))
@@ -144,6 +138,7 @@ impl XhpkeSecretKey {
 /// Opaque xHPKE public key. Key material stays inside WASM memory.
 #[wasm_bindgen]
 pub struct XhpkePublicKey {
+    /// Encryption key owned by this handle.
     pub(crate) inner: xhpke::PublicKey,
 }
 
@@ -151,11 +146,11 @@ pub struct XhpkePublicKey {
 impl XhpkePublicKey {
     /// Creates a public key from a 1216-byte array.
     pub fn from_bytes(bytes: &[u8]) -> Result<XhpkePublicKey, JsError> {
-        let arr: [u8; 1216] = bytes
+        let key: &[u8; xhpke::PUBLIC_KEY_SIZE] = bytes
             .try_into()
             .map_err(|_| JsError::new("public key must be 1216 bytes"))?;
         Ok(Self {
-            inner: xhpke::PublicKey::from_bytes(&arr).map_err(|e| JsError::new(&e.to_string()))?,
+            inner: xhpke::PublicKey::from_bytes(key).map_err(|e| JsError::new(&e.to_string()))?,
         })
     }
 
@@ -196,19 +191,18 @@ impl XhpkePublicKey {
         })
     }
 
-    /// Encrypts a single-shot message to this public key, wiping the plaintext
-    /// from WASM memory before return.
-    /// Returns: encapsulated key (1120 bytes) || ciphertext
+    /// Encrypts one message and prefixes it with the 1120-byte encapsulated key.
     pub fn seal(
         &self,
         msg_to_seal: Vec<u8>,
-        msg_to_auth: &[u8],
+        msg_to_auth: Vec<u8>,
         domain: &[u8],
     ) -> Result<Vec<u8>, JsError> {
         let msg_to_seal = Zeroizing::new(msg_to_seal);
+        let auth = Zeroizing::new(msg_to_auth);
         let (encap_key, ciphertext) = self
             .inner
-            .seal(&msg_to_seal, msg_to_auth, domain)
+            .seal(&msg_to_seal, &auth, domain)
             .map_err(|e| JsError::new(&e.to_string()))?;
 
         let mut result = Vec::with_capacity(encap_key.len() + ciphertext.len());
@@ -221,6 +215,7 @@ impl XhpkePublicKey {
 /// Opaque xHPKE fingerprint.
 #[wasm_bindgen]
 pub struct XhpkeFingerprint {
+    /// Key fingerprint owned by this handle.
     pub(crate) inner: xhpke::Fingerprint,
 }
 
@@ -228,11 +223,11 @@ pub struct XhpkeFingerprint {
 impl XhpkeFingerprint {
     /// Creates a fingerprint from a 32-byte array.
     pub fn from_bytes(bytes: &[u8]) -> Result<XhpkeFingerprint, JsError> {
-        let arr: [u8; 32] = bytes
+        let fingerprint: &[u8; xhpke::FINGERPRINT_SIZE] = bytes
             .try_into()
             .map_err(|_| JsError::new("fingerprint must be 32 bytes"))?;
         Ok(Self {
-            inner: xhpke::Fingerprint::from_bytes(&arr),
+            inner: xhpke::Fingerprint::from_bytes(fingerprint),
         })
     }
 
@@ -245,7 +240,9 @@ impl XhpkeFingerprint {
 /// Stateful HPKE sender for multi-message encryption.
 #[wasm_bindgen]
 pub struct XhpkeSender {
+    /// Sender context with the next encryption nonce.
     inner: xhpke::Sender,
+    /// Encapsulated key for initializing the peer's receiver.
     encap_key: Vec<u8>,
 }
 
@@ -258,10 +255,11 @@ impl XhpkeSender {
 
     /// Encrypts a message using the next nonce in the sequence, wiping the
     /// plaintext from WASM memory before return.
-    pub fn seal(&mut self, msg_to_seal: Vec<u8>, msg_to_auth: &[u8]) -> Result<Vec<u8>, JsError> {
+    pub fn seal(&mut self, msg_to_seal: Vec<u8>, msg_to_auth: Vec<u8>) -> Result<Vec<u8>, JsError> {
         let msg_to_seal = Zeroizing::new(msg_to_seal);
+        let auth = Zeroizing::new(msg_to_auth);
         self.inner
-            .seal(&msg_to_seal, msg_to_auth)
+            .seal(&msg_to_seal, &auth)
             .map_err(|e| JsError::new(&e.to_string()))
     }
 }
@@ -269,22 +267,22 @@ impl XhpkeSender {
 /// Stateful HPKE receiver for multi-message decryption.
 #[wasm_bindgen]
 pub struct XhpkeReceiver {
+    /// Receiver context with the next decryption nonce.
     inner: xhpke::Receiver,
 }
 
 #[wasm_bindgen]
 impl XhpkeReceiver {
-    /// Decrypts a message using the next nonce in the sequence. The plaintext
-    /// is copied straight into JS memory so no unwiped copy is left in WASM
-    /// memory.
+    /// Decrypts a message using the next nonce and wipes the WASM output buffer.
     pub fn open(
         &mut self,
         msg_to_open: &[u8],
-        msg_to_auth: &[u8],
+        msg_to_auth: Vec<u8>,
     ) -> Result<js_sys::Uint8Array, JsError> {
+        let auth = Zeroizing::new(msg_to_auth);
         let plaintext = Zeroizing::new(
             self.inner
-                .open(msg_to_open, msg_to_auth)
+                .open(msg_to_open, &auth)
                 .map_err(|e| JsError::new(&e.to_string()))?,
         );
         Ok(js_sys::Uint8Array::from(&plaintext[..]))

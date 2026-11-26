@@ -9,18 +9,15 @@
  *
  * https://datatracker.ietf.org/doc/html/rfc8949
  *
- * Only a minimal subset of CBOR is supported: booleans, null, 64-bit
- * integers, text strings, byte strings, arrays and maps with integer keys. The
- * encoding is deterministic (RFC 8949 Section 4.2.1). Integers take their
+ * The codecs support booleans, null, 64-bit integers, text strings, byte
+ * strings, arrays and maps with integer keys. The encoding is deterministic
+ * (RFC 8949 Section 4.2.1). Integers take their
  * shortest form, map keys are sorted by their encoded bytes, and there are no
  * indefinite lengths, floats or tags.
  *
- * A codec declares the shape of a value the way a Rust type deriving `Cbor`
- * does. Values are bound to their codec before they are encoded, and bytes
- * before they are decoded. The `cose` and `cwt` functions take them the same
- * way. {@link encode} and {@link decode} reject any encoding that breaks the
- * rules above. The cborg library handles the bytes, so a codec converts to and
- * from what cborg takes, such as a `Map` for a map.
+ * A codec declares the shape of a value. Bind values to their codec before
+ * encoding, and bytes before decoding. The `cose` and `cwt` modules use the
+ * same bindings. {@link encode} and {@link decode} validate the wire format.
  *
  * @example
  * ```ts
@@ -40,7 +37,7 @@
 import { cbor_verify } from "./wasm/darkbio_crypto_wasm.js";
 import { parse, serialize } from "./internal/cborg.js";
 import { ensureInit } from "./internal/init.js";
-import { U64_MAX } from "./internal/limits.js";
+import { I64_MAX, I64_MIN, U64_MAX } from "./internal/limits.js";
 
 /** A value bound to the codec that encodes it. */
 export interface Encodable<T> {
@@ -198,9 +195,6 @@ function primitive<T>(
   };
   return codec(guard, guard);
 }
-
-const I64_MIN = -(1n << 63n);
-const I64_MAX = (1n << 63n) - 1n;
 
 /** Reads an integer cborg produced, a number within the safe range or a bigint beyond it. */
 function integer(value: unknown, reason: string): bigint {

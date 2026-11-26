@@ -4,21 +4,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** Argon2id parameter bounds and vectors from Go's x/crypto/argon2 package. */
+
 import { describe, it, expect } from "vitest";
 import { key } from "../src/argon2.js";
 
-// Test vectors from Go's x/crypto/argon2 package
 describe("argon2", () => {
-  // Helper to convert hex string to Uint8Array
-  function fromHex(hex: string): Uint8Array {
-    const bytes = new Uint8Array(hex.length / 2);
-    for (let i = 0; i < bytes.length; i++) {
-      bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    }
-    return bytes;
-  }
-
-  // Helper to convert Uint8Array to hex string
+  /** Encodes derived keys as hexadecimal for comparison with the vectors. */
   function toHex(bytes: Uint8Array): string {
     return Array.from(bytes)
       .map((b) => b.toString(16).padStart(2, "0"))
@@ -99,7 +91,7 @@ describe("argon2", () => {
     await expect(key(password, salt, 1, 64, 1, 2 ** 32 + 32)).rejects.toThrow();
     await expect(key(password, salt, 1.5, 64, 1, 32)).rejects.toThrow();
 
-    // A trap on any input above would have left the module unusable
+    // The module can still derive a key after rejecting invalid inputs
     expect(await key(password, salt, 1, 64, 1, 32)).toHaveLength(32);
   });
 });

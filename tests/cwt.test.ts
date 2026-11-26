@@ -4,6 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** CWT claim schemas, signature verification and validity windows. */
+
 import { describe, it, expect } from "vitest";
 import { decode as cborgDecode, encode as cborgEncode } from "cborg";
 import * as cbor from "../src/cbor.js";
@@ -14,6 +16,7 @@ import {
   claims,
   confirmation,
   issue,
+  issueAt,
   oemid,
   peek,
   signer,
@@ -26,9 +29,10 @@ import * as xdsa from "../src/xdsa.js";
 import * as xhpke from "../src/xhpke.js";
 import cwtFixtures from "./testdata/cwt/v0.16.json";
 
+/** Application domain used to sign the test tokens. */
 const domain = new TextEncoder().encode("test-domain");
 
-// The claim set of the basic tokens of the suite.
+/** Claims carried by the basic device token. */
 const Basic = cbor.map({
   sub: claims.subject,
   nbf: claims.notBefore,
@@ -36,7 +40,7 @@ const Basic = cbor.map({
   cnf: claims.confirmXdsa,
 });
 
-// A token valid from 1000000 to 2000000 for the subject, confirming the key.
+/** Issues a device token bound to the supplied public key. */
 async function basicToken(
   issuer: xdsa.SecretKey,
   device: xdsa.PublicKey,
@@ -85,6 +89,48 @@ describe("cwt", () => {
       expect(verified.nbf).toBe(1000000n);
       expect(verified.exp).toBe(2000000n);
       expect(verified.cnf.equals(deviceKey.publicKey())).toBe(true);
+    });
+
+    it("records the supplied COSE timestamp independently of claim validity", async () => {
+      const issuer = await xdsa.SecretKey.generate();
+      const validity = cbor.map({ nbf: claims.notBefore });
+      const values = { nbf: 1000n };
+      const min = -(1n << 63n);
+      const max = (1n << 63n) - 1n;
+
+      // Read the timestamp directly from the protected header
+      for (const timestamp of [min, -37, max]) {
+        const token = await issueAt(
+          validity.value(values),
+          issuer,
+          domain,
+          timestamp,
+        );
+        const [header] = cborgDecode(token, { useMaps: true });
+        expect(cborgDecode(header, { useMaps: true }).get(-70002)).toBe(
+          timestamp,
+        );
+        expect(
+          await verify(validity.bytes(token), issuer.publicKey(), domain, 1000),
+        ).toEqual(values);
+      }
+
+      // Invalid signing times fail before the WASM call
+      for (const time of [
+        0.5,
+        NaN,
+        Infinity,
+        -Infinity,
+        2 ** 53,
+        min - 1n,
+        max + 1n,
+        undefined,
+      ]) {
+        await expect(
+          issueAt(validity.value(values), issuer, domain, time as number),
+          String(time),
+        ).rejects.toThrow(RangeError);
+      }
     });
 
     it("accepts a fractional or bigint now and refuses one outside 64 bits", async () => {
@@ -286,7 +332,7 @@ describe("cwt", () => {
       expect(verified.cnf.equals(deviceKey.publicKey())).toBe(true);
     });
 
-    it("tells the key types apart", async () => {
+    it("rejects an xHPKE confirmation decoded as an xDSA key", async () => {
       const Crypto = cbor.map({
         sub: claims.subject,
         cnf: claims.confirmXhpke,
@@ -438,18 +484,68 @@ describe("cwt", () => {
       const issuerKey = await xdsa.SecretKey.generate();
       await expect(
         issue(cbor.text.value("not a claims map"), issuerKey, domain),
-      ).rejects.toThrow(/claims map/);
-      // A COSE Sign1 over anything but a map is not a token either
+      ).rejects.toThrow(/major type/);
+      await expect(
+        issueAt(cbor.text.value("not a claims map"), issuerKey, domain, 0),
+      ).rejects.toThrow(/major type/);
+
+      // Sign the text as an ordinary COSE payload
       const signed = await cose.sign(
         cbor.text.value("not a claims map"),
         cbor.nil.value(null),
         issuerKey,
         domain,
       );
-      await expect(peek(cbor.raw.bytes(signed))).rejects.toThrow(/claims map/);
+      await expect(peek(cbor.raw.bytes(signed))).rejects.toThrow(/major type/);
       await expect(
         verify(cbor.raw.bytes(signed), issuerKey.publicKey(), domain),
-      ).rejects.toThrow(/claims map/);
+      ).rejects.toThrow(/major type/);
+    });
+
+    it("rejects malformed signed claims with and without a validity check", async () => {
+      const issuer = await xdsa.SecretKey.generate();
+      const verifier = issuer.publicKey();
+      const valid = await issueAt(
+        cbor.map({ nbf: claims.notBefore }).value({ nbf: 0n }),
+        issuer,
+        domain,
+        0,
+      );
+      const [header, unprotected] = cborgDecode(valid, { useMaps: true });
+      const prefix = new TextEncoder().encode("dark-bio-v1:");
+      const aad = cborgEncode([new Uint8Array([...prefix, ...domain]), null]);
+
+      // Sign the raw claims vectors from crypto-rs without normalizing their CBOR
+      const cases: [number[], RegExp][] = [
+        [[0x80], /major type/],
+        [[0xa1, 5], /unexpected end of data/],
+        [[0xa1, 5, 0, 0], /unexpected trailing bytes/],
+        [[0xa2, 5, 0, 1, 0], /map key order/],
+        [[0xa3, 1, 0, 1, 0, 5, 0], /duplicate map key/],
+        [[0xa2, 4, 1, 4, 1], /duplicate claim key 4/],
+        [[0xa2, 5, 0, 5, 0], /duplicate claim key 5/],
+        [[0xa2, 1, 0x81, 0x61, 0xff, 5, 0], /UTF-8/],
+        [[0xa2, 1, 0xa2, 4, 0, 4, 0, 5, 0], /duplicate map key/],
+        [[0xa2, 1, ...Array(31).fill(0x81), 0, 5, 0], /nesting depth/],
+      ];
+      for (const [bytes, reason] of cases) {
+        const payload = new Uint8Array(bytes);
+        const signature = issuer.sign(
+          cborgEncode(["Signature1", header, aad, payload]),
+        );
+        const token = cborgEncode([
+          header,
+          unprotected,
+          payload,
+          signature.toBytes(),
+        ]);
+        for (const now of [0, undefined]) {
+          await expect(
+            verify(cbor.raw.bytes(token), verifier, domain, now),
+            `${toHex(payload)}/${now}`,
+          ).rejects.toThrow(reason);
+        }
+      }
     });
 
     it("reads a token of unknown shape as a raw map", async () => {
@@ -696,8 +792,6 @@ describe("cwt", () => {
     });
   });
 
-  // Tests that a subject reads back exactly as signed, since a dropped leading
-  // U+FEFF would present a token for another identity.
   it("keeps a leading byte order mark in the subject", async () => {
     const issuer = await xdsa.SecretKey.generate();
     const Subject = cbor.map({
@@ -718,10 +812,9 @@ describe("cwt", () => {
     expect(got.sub).toBe("\uFEFFadmin");
   });
 
-  // Tests that the v0.16 fixture corpus still validates, since that was in the
-  // first public release of the Ark, so we can't change the format anymore.
+  // Read the signed claims from the v0.16 wire fixtures
   describe("v0.16 fixtures", () => {
-    // The claim set of the premature fixture token, which has no expiration.
+    /** Claims in the fixture whose validity window starts in the future. */
     const NoExp = cbor.map({
       sub: claims.subject,
       nbf: claims.notBefore,
@@ -748,7 +841,7 @@ describe("cwt", () => {
       expect(got.nbf).toBe(1500000000n);
       expect(got.cnf.equals(issuer.publicKey())).toBe(true);
 
-      // The expired and premature tokens must keep failing temporally
+      // Check the expiration and not-before bounds of the other two tokens
       await expect(
         verify(
           Basic.bytes(fromHex(cwtFixtures.expired)),
@@ -776,7 +869,7 @@ describe("cwt", () => {
   });
 });
 
-// The fields of the basic claim set, for the sets that extend it.
+/** Returns the fields shared by the basic token schemas. */
 function basicFields() {
   return {
     sub: claims.subject,

@@ -4,7 +4,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Resolve the package exports to test the declarations emitted by build:ts.
+/** Checks opaque key constructors and factories in the published declarations. */
+
 import { cbor, xdsa, xhpke } from "@darkbio/crypto";
 
 // Removing a constructor from a declaration implies a public, zero-argument

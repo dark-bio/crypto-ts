@@ -4,12 +4,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+/** HKDF-SHA256 output bounds and test vectors from RFC 5869 Appendix A. */
+
 import { describe, it, expect } from "vitest";
 import { key, extract, expand } from "../src/hkdf.js";
 
-// Test vectors from RFC 5869 Appendix A (SHA-256)
 describe("hkdf", () => {
-  // Helper to convert hex string to Uint8Array
+  /** Decodes hexadecimal vector inputs. */
   function fromHex(hex: string): Uint8Array {
     const bytes = new Uint8Array(hex.length / 2);
     for (let i = 0; i < bytes.length; i++) {
@@ -18,14 +19,13 @@ describe("hkdf", () => {
     return bytes;
   }
 
-  // Helper to convert Uint8Array to hex string
+  /** Encodes derived keys as hexadecimal for comparison with the vectors. */
   function toHex(bytes: Uint8Array): string {
     return Array.from(bytes)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   }
 
-  // RFC 5869 A.1: Basic test case with SHA-256
   it("derives key correctly (RFC 5869 A.1)", async () => {
     const secret = fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
     const salt = fromHex("000102030405060708090a0b0c");
@@ -37,7 +37,6 @@ describe("hkdf", () => {
     expect(toHex(result)).toBe(expected);
   });
 
-  // RFC 5869 A.3: Test with zero-length salt/info
   it("handles empty salt and info (RFC 5869 A.3)", async () => {
     const secret = fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
     const salt = new Uint8Array(0);
@@ -49,7 +48,6 @@ describe("hkdf", () => {
     expect(toHex(result)).toBe(expected);
   });
 
-  // Test extract function
   it("extracts PRK correctly (RFC 5869 A.1)", async () => {
     const secret = fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
     const salt = fromHex("000102030405060708090a0b0c");
@@ -61,7 +59,6 @@ describe("hkdf", () => {
     expect(result.length).toBe(32);
   });
 
-  // Test expand function
   it("expands PRK correctly (RFC 5869 A.1)", async () => {
     const prk = fromHex(
       "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
@@ -74,7 +71,6 @@ describe("hkdf", () => {
     expect(toHex(result)).toBe(expected);
   });
 
-  // Test extract/expand roundtrip matches key
   it("extract + expand equals key", async () => {
     const secret = fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
     const salt = fromHex("000102030405060708090a0b0c");
@@ -87,7 +83,6 @@ describe("hkdf", () => {
     expect(toHex(expanded)).toBe(toHex(direct));
   });
 
-  // Test output lengths beyond the SHA-256 HKDF maximum are rejected
   it("rejects output lengths beyond 8160", async () => {
     const secret = fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
     const salt = fromHex("000102030405060708090a0b0c");

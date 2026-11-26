@@ -9,9 +9,8 @@
  *
  * https://datatracker.ietf.org/doc/html/rfc9106
  *
- * Turns a password and a salt into key material, made deliberately slow and
- * memory hungry so guessing passwords is expensive. For stretching a secret
- * that is already random, see the `hkdf` module instead.
+ * Derives key material from a password and a salt. The memory and time costs
+ * set the work required for each password guess.
  *
  * @module
  */
@@ -46,10 +45,10 @@ import { u32 } from "./internal/limits.js";
  *
  * @example
  * ```ts
- * import { argon2 } from "@darkbio/crypto";
+ * import { argon2, rand } from "@darkbio/crypto";
  *
- * // Example salt only; generate and store a fresh random 16-byte salt in real code
- * const salt = new TextEncoder().encode("example salt1234");
+ * // Store the salt with the cost parameters
+ * const salt = await rand.generate(16);
  * const password = new TextEncoder().encode("password");
  *
  * // RFC 9106's recommended profile for memory-constrained environments

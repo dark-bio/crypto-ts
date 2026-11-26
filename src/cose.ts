@@ -20,8 +20,7 @@
  * ## Domain separation and freshness
  *
  * Choose distinct domains for distinct application operations. Domains
- * prevent a message for one purpose from being accepted for another; they do
- * not stop repeated use within the same domain. Verification accepts a
+ * bind a message to its purpose. Within one domain, verification accepts a
  * signature whose timestamp is at most `maxDriftSecs` seconds in the past or
  * future. An undefined `maxDriftSecs` skips this timestamp check. Applications
  * that require one-time acceptance must also track a message identifier,
@@ -49,11 +48,9 @@
  *   key derivation uses `"dark-bio-v1:" || domain` as its info. The X-Wing
  *   encapsulated key is carried in unprotected header -4.
  * - The encryption plaintext is the encoded COSE_Sign1 followed by zero bytes,
- *   as many as the sender's {@link Padding} policy picks. The signature does
- *   not cover them, while the encryption authenticates them. A receiver finds
- *   the end of the COSE_Sign1 by decoding it and refuses a nonzero byte after
- *   it. It accepts any number of zeros, none included, so a sender can change
- *   its policy without its receivers.
+ *   according to the sender's {@link Padding} policy. Encryption authenticates
+ *   the padding. A receiver accepts zero or more trailing zero bytes and
+ *   rejects any other byte after the signed envelope.
  *
  * Here bstr denotes a CBOR byte string and || denotes byte concatenation. The
  * domain and `msgToAuth` are not included in the returned envelope, so both
@@ -84,23 +81,29 @@
  */
 
 import type { Decodable, Encodable } from "./cbor.js";
-import { parse, serialize } from "./internal/cborg.js";
+import { decodePayload, withSerialized } from "./internal/cborg.js";
 import {
   CosePadding as WasmPadding,
   cose_sign,
+  cose_sign_at,
   cose_sign_detached,
+  cose_sign_detached_at,
   cose_verify,
+  cose_verify_at,
   cose_verify_detached,
+  cose_verify_detached_at,
   cose_signer,
   cose_peek,
   cose_recipient,
   cose_seal,
+  cose_seal_at,
   cose_open,
+  cose_open_at,
   cose_encrypt,
   cose_decrypt,
 } from "./wasm/darkbio_crypto_wasm.js";
 import { ensureInit } from "./internal/init.js";
-import { U32_MAX, U64_MAX } from "./internal/limits.js";
+import { i64, U32_MAX, U64_MAX } from "./internal/limits.js";
 import {
   SecretKey as XdsaSecretKey,
   PublicKey as XdsaPublicKey,
@@ -113,13 +116,12 @@ import {
 } from "./xhpke.js";
 
 /**
- * How many zero bytes a sender appends to the signed envelope inside the
- * encryption, so the ciphertext's length shows little about the message.
+ * Sender policy for zero padding inside an encrypted envelope.
  *
- * Receivers strip any number of zeros, so the policy is the sender's alone and
- * can change without them.
+ * Receivers strip the padding without knowing the sender's policy.
  */
 export class Padding {
+  /** Retains the factory for a fresh native policy on each call. */
   private constructor(private readonly build: () => WasmPadding) {}
 
   /** @internal */
@@ -127,7 +129,7 @@ export class Padding {
     return this.build();
   }
 
-  /** No padding: the plaintext is the signed envelope alone. */
+  /** Leaves the signed envelope unpadded. */
   static none(): Padding {
     return new Padding(() => WasmPadding.none());
   }
@@ -153,7 +155,7 @@ export class Padding {
 }
 
 /**
- * Converts the drift bound of a verification for the WASM boundary.
+ * Rounds a drift bound down to whole seconds and checks the unsigned range.
  */
 function driftToBigInt(maxDriftSecs?: number): bigint | undefined {
   if (maxDriftSecs === undefined) return undefined;
@@ -174,7 +176,7 @@ function driftToBigInt(maxDriftSecs?: number): bigint | undefined {
 /**
  * Creates a COSE_Sign1 signature with an embedded payload.
  *
- * Uses the current system time as the signature timestamp.
+ * Uses the current system time. Use {@link signAt} to supply the timestamp.
  *
  * @param msgToEmbed - The message to sign, embedded in the envelope
  * @param msgToAuth - Additional authenticated data, signed but not embedded
@@ -191,11 +193,42 @@ export async function sign<E, A>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return cose_sign(
-    serialize(msgToEmbed),
-    serialize(msgToAuth),
-    signer._wasm,
-    domain,
+  return withSerialized(msgToEmbed, (payload) =>
+    withSerialized(msgToAuth, (aad) =>
+      cose_sign(payload, aad, signer._wasm, domain),
+    ),
+  );
+}
+
+/**
+ * Creates a COSE_Sign1 signature with an embedded payload and an explicit
+ * timestamp in the protected header.
+ *
+ * @param msgToEmbed - The message to sign, embedded in the envelope
+ * @param msgToAuth - Additional authenticated data, signed but not embedded
+ * @param signer - The xDSA secret key to sign with
+ * @param domain - Application domain for separating protocol purposes
+ * @param timestamp - Signing time in whole seconds since the Unix epoch, as a
+ *   safe integer or a signed 64-bit bigint
+ * @returns The serialized COSE_Sign1 envelope
+ * @throws RangeError if `timestamp` is not a safe integer or a signed 64-bit
+ *   bigint
+ * @throws CodecError if a message does not fit its codec
+ * @throws If a message falls outside the restricted CBOR type system
+ */
+export async function signAt<E, A>(
+  msgToEmbed: Encodable<E>,
+  msgToAuth: Encodable<A>,
+  signer: XdsaSecretKey,
+  domain: Uint8Array,
+  timestamp: number | bigint,
+): Promise<Uint8Array> {
+  const secs = i64(timestamp, "timestamp");
+  await ensureInit();
+  return withSerialized(msgToEmbed, (payload) =>
+    withSerialized(msgToAuth, (aad) =>
+      cose_sign_at(payload, aad, signer._wasm, domain, secs),
+    ),
   );
 }
 
@@ -206,6 +239,7 @@ export async function sign<E, A>(
  * The caller's message is authenticated in external_aad, and the payload in
  * the signature input is empty. See the module's wire profile for
  * interoperability. Uses the current system time as the signature timestamp.
+ * Use {@link signDetachedAt} to supply the timestamp.
  *
  * @param msgToAuth - The message to sign, not embedded in the envelope
  * @param signer - The xDSA secret key to sign with
@@ -220,13 +254,46 @@ export async function signDetached<A>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return cose_sign_detached(serialize(msgToAuth), signer._wasm, domain);
+  return withSerialized(msgToAuth, (aad) =>
+    cose_sign_detached(aad, signer._wasm, domain),
+  );
+}
+
+/**
+ * Creates a detached COSE_Sign1 signature with an explicit timestamp in the
+ * protected header.
+ *
+ * The envelope follows {@link signDetached}.
+ *
+ * @param msgToAuth - The message to sign, not embedded in the envelope
+ * @param signer - The xDSA secret key to sign with
+ * @param domain - Application domain for separating protocol purposes
+ * @param timestamp - Signing time in whole seconds since the Unix epoch, as a
+ *   safe integer or a signed 64-bit bigint
+ * @returns The serialized COSE_Sign1 envelope
+ * @throws RangeError if `timestamp` is not a safe integer or a signed 64-bit
+ *   bigint
+ * @throws CodecError if the message does not fit its codec
+ * @throws If the message falls outside the restricted CBOR type system
+ */
+export async function signDetachedAt<A>(
+  msgToAuth: Encodable<A>,
+  signer: XdsaSecretKey,
+  domain: Uint8Array,
+  timestamp: number | bigint,
+): Promise<Uint8Array> {
+  const secs = i64(timestamp, "timestamp");
+  await ensureInit();
+  return withSerialized(msgToAuth, (aad) =>
+    cose_sign_detached_at(aad, signer._wasm, domain, secs),
+  );
 }
 
 /**
  * Verifies a COSE_Sign1 signature and returns the embedded payload.
  *
- * Uses the current system time for the drift check.
+ * Uses the current system time for the drift check. Use {@link verifyAt} to
+ * supply the reference time.
  *
  * @param msgToCheck - The serialized COSE_Sign1 envelope, bound to the codec
  *   of its payload
@@ -249,21 +316,57 @@ export async function verify<T, A>(
   domain: Uint8Array,
   maxDriftSecs?: number,
 ): Promise<T> {
+  const drift = driftToBigInt(maxDriftSecs);
   await ensureInit();
-  const payload = cose_verify(
-    msgToCheck.bytes,
-    serialize(msgToAuth),
-    verifier._wasm,
-    domain,
-    driftToBigInt(maxDriftSecs),
+  const payload = withSerialized(msgToAuth, (aad) =>
+    cose_verify(msgToCheck.bytes, aad, verifier._wasm, domain, drift),
   );
-  return msgToCheck.codec.decode(parse(payload));
+  return decodePayload(msgToCheck, payload);
+}
+
+/**
+ * Verifies a COSE_Sign1 signature against an explicit reference time and
+ * returns the embedded payload.
+ *
+ * @param msgToCheck - The serialized COSE_Sign1 envelope, bound to the codec
+ *   of its payload
+ * @param msgToAuth - The same additional authenticated data used during signing
+ * @param verifier - The xDSA public key to verify against
+ * @param domain - Application domain for separating protocol purposes
+ * @param maxDriftSecs - Maximum allowed timestamp difference in seconds, past
+ *   or future. A value of n accepts differences up to and including n, with
+ *   fractions rounded down. Undefined skips the check.
+ * @param now - Reference time in whole seconds since the Unix epoch, as a safe
+ *   integer or a signed 64-bit bigint
+ * @returns The decoded payload
+ * @throws RangeError if `now` is not a safe integer or a signed 64-bit bigint
+ * @throws If `maxDriftSecs` is negative or beyond 64 bits
+ * @throws If the envelope is malformed, carries no payload or does not verify
+ *   for this key, `msgToAuth` and `domain`, or its timestamp drifts too far
+ * @throws CodecError if the payload or `msgToAuth` does not fit its codec
+ */
+export async function verifyAt<T, A>(
+  msgToCheck: Decodable<T>,
+  msgToAuth: Encodable<A>,
+  verifier: XdsaPublicKey,
+  domain: Uint8Array,
+  maxDriftSecs: number | undefined,
+  now: number | bigint,
+): Promise<T> {
+  const secs = i64(now, "now");
+  const drift = driftToBigInt(maxDriftSecs);
+  await ensureInit();
+  const payload = withSerialized(msgToAuth, (aad) =>
+    cose_verify_at(msgToCheck.bytes, aad, verifier._wasm, domain, drift, secs),
+  );
+  return decodePayload(msgToCheck, payload);
 }
 
 /**
  * Verifies a COSE_Sign1 signature with a detached payload.
  *
- * Uses the current system time for the drift check.
+ * Uses the current system time for the drift check. Use
+ * {@link verifyDetachedAt} to supply the reference time.
  *
  * @param msgToCheck - The serialized COSE_Sign1 envelope, with a null payload
  * @param msgToAuth - The same message used during signing
@@ -284,14 +387,52 @@ export async function verifyDetached<A>(
   domain: Uint8Array,
   maxDriftSecs?: number,
 ): Promise<void> {
+  const drift = driftToBigInt(maxDriftSecs);
   await ensureInit();
-  cose_verify_detached(
-    msgToCheck,
-    serialize(msgToAuth),
-    verifier._wasm,
-    domain,
-    driftToBigInt(maxDriftSecs),
-  );
+  withSerialized(msgToAuth, (aad) => {
+    cose_verify_detached(msgToCheck, aad, verifier._wasm, domain, drift);
+  });
+}
+
+/**
+ * Verifies a detached COSE_Sign1 signature against an explicit reference time.
+ *
+ * @param msgToCheck - The serialized COSE_Sign1 envelope, with a null payload
+ * @param msgToAuth - The same message used during signing
+ * @param verifier - The xDSA public key to verify against
+ * @param domain - Application domain for separating protocol purposes
+ * @param maxDriftSecs - Maximum allowed timestamp difference in seconds, past
+ *   or future. A value of n accepts differences up to and including n, with
+ *   fractions rounded down. Undefined skips the check.
+ * @param now - Reference time in whole seconds since the Unix epoch, as a safe
+ *   integer or a signed 64-bit bigint
+ * @throws RangeError if `now` is not a safe integer or a signed 64-bit bigint
+ * @throws If `maxDriftSecs` is negative or beyond 64 bits
+ * @throws If the envelope is malformed, embeds a payload or does not verify
+ *   for this key, `msgToAuth` and `domain`, or its timestamp drifts too far
+ * @throws CodecError if `msgToAuth` does not fit its codec
+ */
+export async function verifyDetachedAt<A>(
+  msgToCheck: Uint8Array,
+  msgToAuth: Encodable<A>,
+  verifier: XdsaPublicKey,
+  domain: Uint8Array,
+  maxDriftSecs: number | undefined,
+  now: number | bigint,
+): Promise<void> {
+  const secs = i64(now, "now");
+  const drift = driftToBigInt(maxDriftSecs);
+  await ensureInit();
+  withSerialized(msgToAuth, (aad) => {
+    cose_verify_detached_at(
+      msgToCheck,
+      aad,
+      verifier._wasm,
+      domain,
+      drift,
+      secs,
+    );
+  });
 }
 
 /**
@@ -326,7 +467,7 @@ export async function signer(signature: Uint8Array): Promise<XdsaFingerprint> {
  */
 export async function peek<T>(signature: Decodable<T>): Promise<T> {
   await ensureInit();
-  return signature.codec.decode(parse(cose_peek(signature.bytes)));
+  return decodePayload(signature, cose_peek(signature.bytes));
 }
 
 /**
@@ -350,7 +491,8 @@ export async function recipient(
 /**
  * Signs a message then encrypts it to a recipient.
  *
- * Uses the current system time as the signature timestamp.
+ * Uses the current system time as the signature timestamp. Use {@link sealAt}
+ * to supply the timestamp.
  *
  * @param msgToSeal - The message to sign and encrypt
  * @param msgToAuth - Additional authenticated data, signed and bound to the
@@ -373,25 +515,94 @@ export async function seal<S, A>(
   domain: Uint8Array,
   padding: Padding,
 ): Promise<Uint8Array> {
-  // Plain JavaScript callers can pass any value as the policy
+  return withSealingInputs(
+    msgToSeal,
+    msgToAuth,
+    padding,
+    (plaintext, aad, policy) =>
+      cose_seal(
+        plaintext,
+        aad,
+        signerKey._wasm,
+        recipientKey._wasm,
+        domain,
+        policy,
+      ),
+  );
+}
+
+/**
+ * Signs a message with an explicit timestamp in the protected header, then
+ * encrypts it to a recipient.
+ *
+ * @param msgToSeal - The message to sign and encrypt
+ * @param msgToAuth - Additional authenticated data, signed and bound to the
+ *   encryption but not embedded
+ * @param signerKey - The xDSA secret key to sign with
+ * @param recipientKey - The xHPKE public key to encrypt to
+ * @param domain - Application domain for HPKE key derivation
+ * @param padding - Sender's policy for zeros after the signed envelope
+ * @param timestamp - Signing time in whole seconds since the Unix epoch, as a
+ *   safe integer or a signed 64-bit bigint
+ * @returns The serialized COSE_Encrypt0 envelope holding the encrypted
+ *   COSE_Sign1
+ * @throws RangeError if `timestamp` is not a safe integer or a signed 64-bit
+ *   bigint
+ * @throws If `padding` is not a {@link Padding}
+ * @throws CodecError if a message does not fit its codec
+ * @throws If a message falls outside the restricted CBOR type system
+ */
+export async function sealAt<S, A>(
+  msgToSeal: Encodable<S>,
+  msgToAuth: Encodable<A>,
+  signerKey: XdsaSecretKey,
+  recipientKey: XhpkePublicKey,
+  domain: Uint8Array,
+  padding: Padding,
+  timestamp: number | bigint,
+): Promise<Uint8Array> {
+  const secs = i64(timestamp, "timestamp");
+  return withSealingInputs(
+    msgToSeal,
+    msgToAuth,
+    padding,
+    (plaintext, aad, policy) =>
+      cose_seal_at(
+        plaintext,
+        aad,
+        signerKey._wasm,
+        recipientKey._wasm,
+        domain,
+        policy,
+        secs,
+      ),
+  );
+}
+
+/** Wipes encoded inputs and releases the native policy after sealing. */
+async function withSealingInputs<S, A>(
+  msgToSeal: Encodable<S>,
+  msgToAuth: Encodable<A>,
+  padding: Padding,
+  sealPayload: (
+    plaintext: Uint8Array,
+    aad: Uint8Array,
+    policy: WasmPadding,
+  ) => Uint8Array,
+): Promise<Uint8Array> {
+  // Reject an invalid policy before allocating WASM resources
   if (!(padding instanceof Padding)) {
     throw new Error("padding must be a Padding instance");
   }
   await ensureInit();
   const wasmPadding = padding._toWasm();
-  let plaintext: Uint8Array | undefined;
   try {
-    plaintext = serialize(msgToSeal);
-    return cose_seal(
-      plaintext,
-      serialize(msgToAuth),
-      signerKey._wasm,
-      recipientKey._wasm,
-      domain,
-      wasmPadding,
+    return withSerialized(msgToSeal, (plaintext) =>
+      withSerialized(msgToAuth, (aad) =>
+        sealPayload(plaintext, aad, wasmPadding),
+      ),
     );
   } finally {
-    plaintext?.fill(0);
     wasmPadding.free();
   }
 }
@@ -399,7 +610,8 @@ export async function seal<S, A>(
 /**
  * Decrypts and verifies a sealed message.
  *
- * Uses the current system time for the drift check.
+ * Uses the current system time for the drift check. Use {@link openAt} to
+ * supply the reference time.
  *
  * @param msgToOpen - The serialized COSE_Encrypt0 envelope, bound to the codec
  *   of its payload
@@ -424,20 +636,66 @@ export async function open<T, A>(
   domain: Uint8Array,
   maxDriftSecs?: number,
 ): Promise<T> {
+  const drift = driftToBigInt(maxDriftSecs);
   await ensureInit();
-  const payload = cose_open(
-    msgToOpen.bytes,
-    serialize(msgToAuth),
-    recipientKey._wasm,
-    senderKey._wasm,
-    domain,
-    driftToBigInt(maxDriftSecs),
+  const payload = withSerialized(msgToAuth, (aad) =>
+    cose_open(
+      msgToOpen.bytes,
+      aad,
+      recipientKey._wasm,
+      senderKey._wasm,
+      domain,
+      drift,
+    ),
   );
-  try {
-    return msgToOpen.codec.decode(parse(payload));
-  } finally {
-    payload.fill(0);
-  }
+  return decodePayload(msgToOpen, payload);
+}
+
+/**
+ * Decrypts a sealed message and verifies it against an explicit reference time.
+ *
+ * @param msgToOpen - The serialized COSE_Encrypt0 envelope, bound to the codec
+ *   of its payload
+ * @param msgToAuth - The same additional authenticated data used during sealing
+ * @param recipientKey - The xHPKE secret key to decrypt with
+ * @param senderKey - The xDSA public key to verify the signature against
+ * @param domain - Application domain for HPKE key derivation
+ * @param maxDriftSecs - Maximum allowed timestamp difference in seconds, past
+ *   or future. A value of n accepts differences up to and including n, with
+ *   fractions rounded down. Undefined skips the check.
+ * @param now - Reference time in whole seconds since the Unix epoch, as a safe
+ *   integer or a signed 64-bit bigint
+ * @returns The decoded payload
+ * @throws RangeError if `now` is not a safe integer or a signed 64-bit bigint
+ * @throws If `maxDriftSecs` is negative or beyond 64 bits
+ * @throws If the envelope is malformed, does not decrypt or verify for these
+ *   keys, `msgToAuth` and `domain`, or its timestamp drifts too far
+ * @throws CodecError if the payload or `msgToAuth` does not fit its codec
+ */
+export async function openAt<T, A>(
+  msgToOpen: Decodable<T>,
+  msgToAuth: Encodable<A>,
+  recipientKey: XhpkeSecretKey,
+  senderKey: XdsaPublicKey,
+  domain: Uint8Array,
+  maxDriftSecs: number | undefined,
+  now: number | bigint,
+): Promise<T> {
+  const secs = i64(now, "now");
+  const drift = driftToBigInt(maxDriftSecs);
+  await ensureInit();
+  const payload = withSerialized(msgToAuth, (aad) =>
+    cose_open_at(
+      msgToOpen.bytes,
+      aad,
+      recipientKey._wasm,
+      senderKey._wasm,
+      domain,
+      drift,
+      secs,
+    ),
+  );
+  return decodePayload(msgToOpen, payload);
 }
 
 /**
@@ -470,12 +728,8 @@ export async function encrypt<A>(
   await ensureInit();
   const wasmPadding = padding._toWasm();
   try {
-    return cose_encrypt(
-      sign1,
-      serialize(msgToAuth),
-      recipientKey._wasm,
-      domain,
-      wasmPadding,
+    return withSerialized(msgToAuth, (aad) =>
+      cose_encrypt(sign1, aad, recipientKey._wasm, domain, wasmPadding),
     );
   } finally {
     wasmPadding.free();
@@ -508,10 +762,7 @@ export async function decrypt<A>(
   domain: Uint8Array,
 ): Promise<Uint8Array> {
   await ensureInit();
-  return cose_decrypt(
-    msgToOpen,
-    serialize(msgToAuth),
-    recipientKey._wasm,
-    domain,
+  return withSerialized(msgToAuth, (aad) =>
+    cose_decrypt(msgToOpen, aad, recipientKey._wasm, domain),
   );
 }
